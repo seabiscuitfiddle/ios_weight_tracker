@@ -18,7 +18,19 @@ let package = Package(
         .library(name: "TallyStore", targets: ["TallyStore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        // Floor is 7.11.1, not 7.0.0, on purpose. Earlier 7.x releases compile GRDB's
+        // snapshot API on Linux, where Ubuntu's libsqlite3 is built without
+        // SQLITE_ENABLE_SNAPSHOT — so linking fails with undefined references to
+        // sqlite3_snapshot_*. 7.11.1's manifest guards that with
+        // `.define("SQLITE_DISABLE_SNAPSHOT", .when(platforms: [.linux]))`.
+        //
+        // The subtlety worth knowing: GRDB's manifest requires swift-tools-version 6.1, and
+        // SPM silently skips dependency versions whose tools-version exceeds the toolchain.
+        // On a Swift 6.0 toolchain, resolution therefore walks *backwards* to 7.8.0 and the
+        // link fails. With this floor it fails loudly at resolution instead, saying the
+        // toolchain is too old — which is a far better error than a screen of undefined
+        // symbols in someone else's package. Requires Swift 6.1+.
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
     ],
     targets: [
         .target(name: "TallyCore"),

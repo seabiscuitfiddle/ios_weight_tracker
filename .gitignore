@@ -1,7 +1,10 @@
 # Swift Package Manager
 .build/
 .swiftpm/
-Package.resolved
+
+# Package.resolved IS committed. Tally is an application, not a library, so builds should be
+# reproducible: leaving it out let two CI jobs in the same run resolve different GRDB versions
+# (7.8.0 and 7.11.1), which is how a link failure appeared on one platform and not the other.
 
 # Xcode — the project is generated from project.yml by XcodeGen, never committed.
 # Run `xcodegen generate` after cloning. See README.

@@ -128,8 +128,15 @@ swift test
 
 Two prerequisites that a Mac gets for free:
 
-- **A Swift 6 toolchain.** Install from [swift.org/download](https://swift.org/download), or
-  extract a tarball anywhere and point `SWIFT_TOOLCHAIN` at its `usr/` directory.
+- **A Swift 6.1 or newer toolchain.** Install from [swift.org/download](https://swift.org/download),
+  or extract a tarball anywhere and point `SWIFT_TOOLCHAIN` at its `usr/` directory.
+
+  6.1 is a hard floor, and the failure mode if you ignore it is nasty. GRDB's manifest declares
+  `swift-tools-version:6.1`, and SPM silently skips dependency versions whose tools-version
+  exceeds your toolchain — so an older Swift resolves *backwards* to a GRDB release that predates
+  its Linux snapshot guard, and the build dies with undefined references to `sqlite3_snapshot_*`
+  rather than telling you the toolchain is too old. The version floor in `Package.swift` now turns
+  that into a clear resolution error instead.
 - **SQLite headers.** GRDB compiles against `<sqlite3.h>`, which Ubuntu ships in a separate
   package (Apple platforms get SQLite from the SDK):
 

@@ -37,7 +37,25 @@ jobs:
 
       - uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.0"
+          # Must be 6.1 or newer, and should track whatever developers run. GRDB's manifest
+          # requires swift-tools-version 6.1; on an older toolchain SPM quietly resolves
+          # *backwards* to a GRDB release that predates its Linux snapshot guard, and the build
+          # dies with undefined sqlite3_snapshot_* symbols. See Package.swift.
+          swift-version: "6.3"
+
+      - name: Verify toolchain
+        # Checked explicitly so the failure names the real problem. Without this, too old a
+        # toolchain surfaces as a linker error deep inside a dependency.
+        run: |
+          swift --version
+          version=$(swift --version 2>&1 | grep -oE 'Swift version [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -1)
+          major=${version%%.*}
+          minor=${version##*.}
+          if [ "$major" -lt 6 ] || { [ "$major" -eq 6 ] && [ "$minor" -lt 1 ]; }; then
+            echo "::error::Swift $version is too old. GRDB needs swift-tools-version 6.1+;" \
+                 "older toolchains resolve backwards to a GRDB that fails to link on Linux."
+            exit 1
+          fi
 
       - name: Cache SwiftPM dependencies
         uses: actions/cache@v4
