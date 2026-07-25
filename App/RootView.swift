@@ -77,6 +77,9 @@ struct TallyTabBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(tab.title)
             .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+            // Tests target this rather than the visible title, so renaming a tab is a copy
+            // change and not a test failure.
+            .accessibilityIdentifier("tab.\(tab.rawValue)")
         }
 
         @ViewBuilder private var icon: some View {

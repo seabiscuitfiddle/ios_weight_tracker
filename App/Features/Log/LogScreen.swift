@@ -103,6 +103,7 @@ struct LogScreen: View {
                     .focused($isComposeFocused)
                     .submitLabel(.send)
                     .onSubmit(send)
+                    .accessibilityIdentifier("log.composeField")
 
                 Button(action: send) {
                     Image(systemName: "arrow.up")
@@ -114,6 +115,11 @@ struct LogScreen: View {
                 .buttonStyle(.plain)
                 .disabled(!canSend)
                 .accessibilityLabel("Send")
+                // Identifier as well as a label, because `.submitLabel(.send)` above gives the
+                // keyboard's return key the label "Send" too — so a label-based query matches
+                // two elements once the keyboard is up. Labels are for users; tests key off
+                // this, which also means rewording the label can't break them.
+                .accessibilityIdentifier("log.sendButton")
             }
             .padding(.horizontal, Metrics.space4)
             .padding(.vertical, Metrics.space2 + 2)
