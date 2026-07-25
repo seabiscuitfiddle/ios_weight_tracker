@@ -346,8 +346,7 @@ struct SettingsStoreTests {
             heightCentimeters: 178,
             biologicalSex: .female,
             activityLevel: .moderate,
-            massUnit: .kilograms,
-            activityLevelIncludesLoggedExercise: true
+            massUnit: .kilograms
         )
 
         try store.save(profile)

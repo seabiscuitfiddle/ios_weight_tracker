@@ -44,13 +44,17 @@ public struct UserProfile: Hashable, Sendable, Codable {
         }
 
         /// Shown under the picker so the choice is judgeable rather than guessed at.
+        ///
+        /// Deliberately phrased around everyday movement, not workouts. Tally subtracts logged
+        /// exercise from the day's net, so a workout counted here as well would be counted
+        /// twice — see ``UserProfile/activityLevel``.
         public var detail: String {
             switch self {
-            case .sedentary: "Desk job, little deliberate exercise"
-            case .light: "Light exercise 1–3 days a week"
-            case .moderate: "Moderate exercise 3–5 days a week"
-            case .veryActive: "Hard exercise 6–7 days a week"
-            case .extraActive: "Physical job or twice-daily training"
+            case .sedentary: "Desk job, mostly sitting"
+            case .light: "On your feet some of the day"
+            case .moderate: "On your feet most of the day"
+            case .veryActive: "Physically demanding job"
+            case .extraActive: "Heavy labour, or training as a job"
             }
         }
     }
@@ -58,27 +62,33 @@ public struct UserProfile: Hashable, Sendable, Codable {
     public var birthDate: Date?
     public var heightCentimeters: Double?
     public var biologicalSex: BiologicalSex
+
+    /// Everyday movement **excluding** any exercise that gets logged.
+    ///
+    /// This has to exclude logged workouts, and it isn't a preference. Tally compares the daily
+    /// goal against *net* calories (food − exercise), so the expenditure the goal is built from
+    /// must be expenditure-before-exercise. Folding workouts into this multiplier as well would
+    /// credit them twice: once by raising the goal, once by lowering the net.
+    ///
+    /// The same reasoning makes the observed estimate consistent — deriving expenditure from
+    /// net intake yields a before-exercise number too, so the formula estimate and the observed
+    /// one measure the same quantity and can legitimately be blended.
     public var activityLevel: ActivityLevel
+
     public var massUnit: MassUnit
-    /// When true, exercise logged by hand is assumed to already be reflected in
-    /// ``activityLevel`` and is not subtracted again. Off by default, because the design's
-    /// whole premise is that logged exercise moves the net number.
-    public var activityLevelIncludesLoggedExercise: Bool
 
     public init(
         birthDate: Date? = nil,
         heightCentimeters: Double? = nil,
         biologicalSex: BiologicalSex = .unspecified,
         activityLevel: ActivityLevel = .light,
-        massUnit: MassUnit = .pounds,
-        activityLevelIncludesLoggedExercise: Bool = false
+        massUnit: MassUnit = .pounds
     ) {
         self.birthDate = birthDate
         self.heightCentimeters = heightCentimeters
         self.biologicalSex = biologicalSex
         self.activityLevel = activityLevel
         self.massUnit = massUnit
-        self.activityLevelIncludesLoggedExercise = activityLevelIncludesLoggedExercise
     }
 
     public static let `default` = UserProfile()
