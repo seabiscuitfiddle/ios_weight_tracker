@@ -11,6 +11,18 @@ import TallyCore
 public enum TallyDatabase {
     public static let filename = "tally.sqlite"
 
+    /// The App Group whose container holds the database.
+    ///
+    /// Lives here rather than in either target because **both** the app and the widget need it and
+    /// they must agree exactly — a mismatch gives the two processes separate containers, with no
+    /// build error and a permanently empty widget as the only symptom. One constant in a module
+    /// they both link makes disagreeing impossible.
+    ///
+    /// Must match `com.apple.security.application-groups` in `App/Tally.entitlements` and
+    /// `Widget/TallyWidget.entitlements`, and be registered in the Apple developer portal. See
+    /// README, "What you must fill in".
+    public static let defaultAppGroupID = "group.com.example.tally"
+
     /// Where the database lives for a given App Group.
     ///
     /// Returns nil when the group isn't configured or entitled — which in practice means the

@@ -64,7 +64,7 @@ struct TallyTimelineProvider: TimelineProvider {
     private func load() -> TallySnapshot {
         // Any failure here shows the empty state rather than stale or invented numbers: a widget
         // that quietly displays yesterday's total is worse than one that shows a dash.
-        guard let url = TallyDatabase.url(forAppGroup: AppGroup.identifier),
+        guard let url = TallyDatabase.url(forAppGroup: TallyDatabase.defaultAppGroupID),
               let reader = try? TallyDatabase.openReadOnly(at: url)
         else {
             return TallySnapshot(
@@ -99,9 +99,4 @@ struct TallyTimelineProvider: TimelineProvider {
             fiberTarget: settings.fiberTargetGrams
         )
     }
-}
-
-/// Must match both entitlements files and the developer portal. See README.
-enum AppGroup {
-    static let identifier = "group.com.example.tally"
 }

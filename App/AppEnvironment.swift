@@ -13,10 +13,6 @@ import TallyStore
 @Observable
 @MainActor
 final class AppEnvironment {
-    /// Must match the App Group in both entitlements files and in the developer portal.
-    /// See README, "What you must fill in".
-    static let appGroupID = "group.com.example.tally"
-
     let stores: StoreBundle
     let keyStore: KeychainAPIKeyStore
 
