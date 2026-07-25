@@ -26,14 +26,20 @@ using an API key you supply.
 - [Getting an API key](#getting-an-api-key)
 - [Building](#building)
 - [Architecture](#architecture)
+- [Keeping this repository publishable](#keeping-this-repository-publishable)
 - [GitHub Actions secrets](#github-actions-secrets)
 - [Project status](#project-status)
+- [License](#license)
 
 ---
 
 ## Running it on a Mac
 
 ### The short version
+
+Needs **Xcode 16.3 or newer**, which in turn needs macOS 15 (Sequoia). See
+[Why 16.3 and not 16](#why-xcode-163-and-not-just-xcode-16) — `bootstrap.sh` checks this first
+and stops with an explanation if the Xcode in front of it is older.
 
 ```sh
 git clone <this repo> && cd ios_weight_tracker
@@ -51,6 +57,34 @@ build isn't signed against a real identity.
 lines of unreviewable XML that merges badly.
 
 To run the same checks CI runs: `./scripts/run-tests.sh`.
+
+### Why Xcode 16.3, and not just Xcode 16
+
+Two separate things fail on an older Xcode, and neither error names the version you need.
+
+**The project will not open.** XcodeGen writes the Xcode 16 project format, and Xcode 15 and
+earlier refuse it:
+
+```
+The project 'Tally' cannot be opened because it is in a future Xcode project file format (77).
+```
+
+**The build then needs Swift 6.1**, which arrived in Xcode 16.3 — Xcode 16.0 through 16.2 ship
+Swift 6.0, so "Xcode 16" is genuinely not enough. The floor is GRDB's, not a preference: its
+manifest declares `swift-tools-version:6.1`, and SPM silently skips dependency versions whose
+tools-version exceeds the toolchain, so an older Swift resolves *backwards* to a GRDB release
+that predates its Linux snapshot guard and fails to link. The version floor in `Package.swift`
+turns that into a clear resolution error, and `bootstrap.sh` catches it one step earlier.
+
+| | Minimum | Why |
+|---|---|---|
+| macOS | 15 (Sequoia) | What Xcode 16.3 itself requires |
+| Xcode | 16.3 | First release with a Swift 6.1 toolchain |
+| Swift | 6.1 | GRDB 7.11.1's manifest is `swift-tools-version:6.1` |
+| XcodeGen | any current | `brew install xcodegen` |
+
+The deployment target is iOS 17, which is unrelated to any of the above — it is what the app
+runs *on*, not what it is built *with*.
 
 ### What works immediately, and what needs setup
 
@@ -82,16 +116,17 @@ database could be opened at all.
 
 ### Putting it on your own iPhone
 
-Three edits, and only the first is in more than one place:
+Two values and one registration. Both values go in `.env` — `cp .env.example .env` — and not into
+any tracked file: this repository is public, and a Team ID identifies your developer account.
 
-1. **`BUNDLE_ID_PREFIX`** in `project.yml` — change `com.example` to something you own.
+1. **`BUNDLE_ID_PREFIX`** — change the `com.example` placeholder to something you own.
 
    This is deliberately a single edit. The bundle IDs, both entitlements files, the App Group, and
    the keychain group all derive from it, and the runtime code derives the App Group from the
    bundle identifier rather than hardcoding it. Nothing else needs changing.
 
-2. **`DEVELOPMENT_TEAM`** in `project.yml` — your 10-character Team ID, from Xcode ›
-   Settings › Accounts, or the Membership page of the developer portal.
+2. **`DEVELOPMENT_TEAM`** — your 10-character Team ID, from Xcode › Settings › Accounts, or the
+   Membership page of the developer portal.
 
 3. **Register the App Group** `group.<your-prefix>.tally` in the developer portal, and enable the
    App Groups capability on **both** the app and widget targets.
@@ -116,20 +151,32 @@ some cannot be shared. **None of them are needed to run on a simulator** — see
 
 ### 1. Signing and identifiers
 
-Both live in `project.yml`, the XcodeGen manifest that generates `Tally.xcodeproj`. You can also
-override them with a local `Secrets.xcconfig`, which is gitignored, so your team ID never lands in
-version control.
+**These go in a local `.env`, never in a tracked file.** This repository is public, and an Apple
+Team ID identifies the account that owns it.
+
+```sh
+cp .env.example .env      # then fill it in
+./scripts/bootstrap.sh    # loads .env and regenerates the project
+```
 
 | Value | What it is | If you skip it |
 |---|---|---|
 | `BUNDLE_ID_PREFIX` | A reverse-DNS prefix you own, e.g. `dev.yourname`. Targets become `<prefix>.tally` and `<prefix>.tally.widget`. | Simulator builds work. On a device, the placeholder `com.example` may already be taken, and provisioning fails. |
 | `DEVELOPMENT_TEAM` | Your 10-character Apple Developer Team ID, from Xcode › Settings › Accounts. | Simulator builds work. Installing on a device fails to sign. |
 
+How they reach the build is worth one paragraph, because two different substitutions are
+involved. `scripts/load-env.sh` exports what is in `.env`; XcodeGen then replaces `${VAR}` in
+`project.yml` as it generates the project. Anything it leaves alone — because you have no `.env`,
+which is the normal case — is expanded by **Xcode** at build time from the placeholder settings
+in `project.yml`. That is why a fresh clone with no configuration at all still builds and runs on
+the simulator as `com.example.tally`.
+
 **`BUNDLE_ID_PREFIX` is a single edit.** Everything derived from it follows automatically:
 
 - Bundle identifiers, via `project.yml`
-- The App Group and keychain group in both entitlements files, via `$(BUNDLE_ID_PREFIX)`
-  substitution
+- The App Group in both entitlements files, via the `$(APP_GROUP_ID)` build setting — defined
+  once in `project.yml` so the widget cannot end up pointing at a different container than the app
+- The keychain group, which is the app's own `$(PRODUCT_BUNDLE_IDENTIFIER)` and so cannot drift
 - The App Group the *running code* looks up, which is derived from the bundle identifier at
   runtime rather than hardcoded — `TallyDatabase.appGroupIdentifier(for:)`, unit-tested
 - The keychain service name, likewise derived from the bundle
@@ -264,7 +311,7 @@ Two prerequisites that a Mac gets for free:
 ### The iOS app
 
 See [Running it on a Mac](#running-it-on-a-mac) — `./scripts/bootstrap.sh` does the setup. The
-short version is Xcode 16+, `brew install xcodegen`, then:
+short version is Xcode 16.3+ (Swift 6.1, on macOS 15), `brew install xcodegen`, then:
 
 ```sh
 ./scripts/bootstrap.sh    # or: xcodegen generate
@@ -273,6 +320,24 @@ xed Tally.xcodeproj
 
 The `.xcodeproj` is **generated, not committed**, so re-run bootstrap after adding or removing
 source files. `./scripts/run-tests.sh` runs everything CI runs, including the simulator tests.
+
+### The app icon
+
+The icon is drawn in code, not stored as artwork:
+
+```sh
+swift scripts/render-icon.swift   # rewrites App/Resources/Assets.xcassets/AppIcon.appiconset
+```
+
+It is a body, an arrow, and the same body taken in, in the design system's paper/ink/accent. The
+generator is committed for the same reason the palette lives in `TallyCore`: a proportion or a
+hex value that drifts from the design shows up in a diff rather than only in a screenshot. Edit
+the script and re-run it — the PNGs it emits are build products that happen to be checked in.
+
+It writes all three appearances iOS 18 asks for: the light icon, a **dark** one, and a
+**tinted** greyscale one. Only the light icon paints its own background — the system draws the
+ground behind the other two, so they are rendered on transparency, and the tinted one is
+greyscale because iOS keys the user's tint to its luminance rather than to its colours.
 
 ---
 
@@ -309,6 +374,35 @@ your chosen rate would breach the floor, the app says so rather than silently ob
 
 ---
 
+## Keeping this repository publishable
+
+Everything account-specific is kept out of tracked files by construction rather than by care:
+
+| Where it lives | What it holds | Why not in the repo |
+|---|---|---|
+| `.env`, gitignored | `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | An Apple Team ID identifies its owner. Template: `.env.example`. |
+| GitHub repository secrets | The same two, optional | Only needed if you add a job that signs for a device. |
+| The device keychain | Your Anthropic API key | Entered in Settings at runtime. There is no build-time key, so no binary can leak one. |
+
+Three things enforce it, in increasing order of how late they catch you:
+
+1. `scripts/check-secrets.sh` — scans tracked files for API keys, Team IDs, hardcoded App
+   Groups, and personal email addresses. Each finding prints what to do about it.
+2. A **pre-commit hook**, installed by `./scripts/bootstrap.sh`, running that same script over
+   what is staged. `git commit --no-verify` still bypasses it; it is a safety net, not a lock.
+3. A **CI job**, so a leak fails the build even if the hook was never installed.
+
+```sh
+./scripts/check-secrets.sh          # everything tracked
+./scripts/check-secrets.sh --staged # what you are about to commit
+```
+
+The one thing none of this can reach is **history**. A value that was committed and then removed
+is still in the repository, and `git log -p` will find it — the fix for that is a history rewrite
+(`git filter-repo`) and a force push, not a follow-up commit.
+
+---
+
 ## GitHub Actions secrets
 
 **The default CI needs no secrets at all.** It runs the package tests on Linux and builds the
@@ -319,6 +413,7 @@ Optional, only if you want the extra capability:
 
 | Secret | Enables | Notes |
 |---|---|---|
+| `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | Generating the project with your own identifiers, for a job that builds or signs for a device. | Both are read by the "Generate project" step. Absent — the normal case, and always on forks — the placeholders in `project.yml` are used instead. |
 | `ANTHROPIC_API_KEY` | A smoke test that calls the real API once, verifying the request shape against the live endpoint. | Costs a fraction of a cent per run. The job is skipped when the secret is absent, so forks are unaffected. Never required — the parser's own tests use recorded fixtures and no network. |
 | `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY` | TestFlight / App Store distribution. | Not used by the current workflow. Only add these if you add a release job. |
 
@@ -383,3 +478,24 @@ Still to do:
 
 `design/tally-design.html` is the source design, kept for reference. Open it in a browser to see
 the six specified surfaces.
+
+---
+
+## License
+
+Copyright (C) 2026 seabiscuitfiddle.
+
+[GNU General Public License v3.0](LICENSE). In short: use it, study it, change it, share it —
+but anything you distribute that is built from this code has to carry the same freedoms, source
+included.
+
+The full text is in [`LICENSE`](LICENSE). Per-file copyright headers have deliberately not been
+added; the license file covers the work, and headers on every source file would bury the
+explanatory comments that are the point of this codebase.
+
+Two things carry their own terms and are **not** covered by it:
+
+- **Archivo**, the typeface the design uses, is under the SIL Open Font License and is not
+  redistributed here — you download it yourself (see [Fonts](#2-fonts)).
+- **GRDB.swift**, the only third-party dependency, is MIT-licensed. Its terms are in
+  `.build/checkouts/GRDB.swift/LICENSE` after a build, and in its repository.

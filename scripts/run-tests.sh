@@ -16,6 +16,13 @@ bold=$(tput bold 2>/dev/null || true)
 plain=$(tput sgr0 2>/dev/null || true)
 step() { printf '\n%s==> %s%s\n' "$bold" "$1" "$plain"; }
 
+# Same order CI uses: the cheapest check that can fail the build runs first. A leaked team ID
+# or key is worth knowing about before waiting out a simulator run.
+step "Secret scan"
+if ! ./scripts/check-secrets.sh; then
+    exit 1
+fi
+
 step "Package tests"
 if ! swift test; then
     echo "Package tests failed." >&2
@@ -30,6 +37,9 @@ fi
 
 if [ ! -d Tally.xcodeproj ]; then
     step "Generating project"
+    # Sourced first so a local .env reaches the generated project, exactly as bootstrap does.
+    # shellcheck source=scripts/load-env.sh
+    source scripts/load-env.sh
     xcodegen generate || exit 1
 fi
 

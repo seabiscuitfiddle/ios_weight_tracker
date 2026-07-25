@@ -24,6 +24,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Cheap and first: a leaked Team ID or API key should fail in seconds, not after a
+      # simulator boot. This is the same script the pre-commit hook runs, so what passes
+      # locally passes here.
+      - name: Scan tracked files
+        run: ./scripts/check-secrets.sh
+
   package:
     name: Package tests (Linux)
     runs-on: ubuntu-24.04
@@ -95,7 +106,23 @@ jobs:
       - name: Generate project
         # The .xcodeproj is not committed; it is regenerated from project.yml on every run,
         # which also means a broken manifest fails here rather than on someone's machine.
-        run: xcodegen generate
+        #
+        # The two values below are the same ones a local .env supplies, read here from repository
+        # secrets. Both are optional and empty on forks and pull requests: XcodeGen then leaves
+        # project.yml's placeholders in place and the simulator build below signs nothing. Set
+        # them only if you add a job that builds for a device.
+        env:
+          BUNDLE_ID_PREFIX: ${{ secrets.BUNDLE_ID_PREFIX }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: |
+          # An unset secret arrives as the empty string, which would override project.yml's
+          # placeholder with nothing, so it is unexported rather than passed through empty.
+          # Written as an `if` because steps run under `bash -e`, where a false `&&` chain is
+          # itself a step failure.
+          if [ -z "${BUNDLE_ID_PREFIX}" ]; then
+            unset BUNDLE_ID_PREFIX
+          fi
+          xcodegen generate
 
       - name: Choose a simulator
         id: simulator
