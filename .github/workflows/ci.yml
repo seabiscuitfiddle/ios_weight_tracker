@@ -58,8 +58,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_16.app
+      # Deliberately no `xcode-select`. Pinning a specific Xcode.app is what broke this before:
+      # several are installed on the runner and not all of them have an iOS simulator runtime
+      # downloaded, so naming one is a coin flip. The runner's default Xcode is the one GitHub
+      # provisions simulators for.
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          echo "--- installed simulator runtimes ---"
+          xcrun simctl list runtimes
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -69,6 +76,35 @@ jobs:
         # which also means a broken manifest fails here rather than on someone's machine.
         run: xcodegen generate
 
+      - name: Choose a simulator
+        id: simulator
+        # Resolve an actual installed device rather than describing one and hoping. A name-based
+        # destination ("iPhone 16") breaks whenever the runner image changes its device set or
+        # ships an Xcode without that runtime; a UDID we just read from simctl cannot.
+        run: |
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+
+          runtimes = json.load(sys.stdin)["devices"]
+          candidates = []
+          for runtime, devices in runtimes.items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable") and "iPhone" in device.get("name", ""):
+                      candidates.append((runtime, device["name"], device["udid"]))
+
+          if not candidates:
+              sys.exit("no available iPhone simulator found")
+
+          # Newest runtime last, so take the end of the sorted list.
+          candidates.sort()
+          runtime, name, udid = candidates[-1]
+          print(udid)
+          print(f"using {name} on {runtime}", file=sys.stderr)
+          ')
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
       - name: Build and test
         # CODE_SIGNING_ALLOWED=NO is what keeps this secret-free: a simulator build needs no
         # team, no certificate, and no provisioning profile.
@@ -77,7 +113,7 @@ jobs:
           xcodebuild \
             -project Tally.xcodeproj \
             -scheme TallyApp \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
