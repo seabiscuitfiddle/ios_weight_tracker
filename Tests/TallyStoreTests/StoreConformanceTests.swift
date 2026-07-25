@@ -403,6 +403,64 @@ struct SettingsStoreTests {
     }
 }
 
+/// The widget opens the shared database read-only. These pin that reads still work and writes
+/// fail loudly, so a mistake surfaces as an error rather than as a widget process quietly
+/// migrating the schema out from under the running app.
+@Suite("Read-only connection")
+struct ReadOnlyStoreTests {
+    /// Seeds a database through a writer, then reopens the same connection read-only.
+    private func seeded() throws -> (writable: StoreBundle, readOnly: StoreBundle) {
+        let writer = try TallyDatabase.openInMemory()
+        let writable = TallyDatabase.stores(writer: writer)
+        try writable.entries.save(
+            Entry(kind: .food, label: "Toast", calories: 200, proteinGrams: 6, day: jan1)
+        )
+        try writable.weights.save(WeightSample(day: jan1, pounds: 168.4))
+        try writable.settings.save(GoalSettings(targetPounds: 155))
+
+        return (writable, TallyDatabase.readOnlyStores(reader: writer))
+    }
+
+    @Test("reads entries, weights and settings")
+    func readsEverything() throws {
+        let (_, readOnly) = try seeded()
+
+        #expect(try readOnly.entries.entries(on: jan1).map(\.label) == ["Toast"])
+        #expect(try readOnly.entries.totals(on: jan1).netCalories == 200)
+        #expect(try readOnly.weights.sample(on: jan1)?.pounds == 168.4)
+        #expect(try readOnly.settings.goalSettings().targetPounds == 155)
+    }
+
+    @Test("refuses to write")
+    func refusesWrites() throws {
+        let (_, readOnly) = try seeded()
+
+        #expect(throws: StoreWriteError.readOnlyConnection) {
+            try readOnly.entries.save(Entry(kind: .food, label: "Nope", calories: 100, day: jan1))
+        }
+        #expect(throws: StoreWriteError.readOnlyConnection) {
+            try readOnly.entries.delete(id: UUID())
+        }
+        #expect(throws: StoreWriteError.readOnlyConnection) {
+            try readOnly.weights.save(WeightSample(day: jan2, pounds: 167))
+        }
+        #expect(throws: StoreWriteError.readOnlyConnection) {
+            try readOnly.settings.save(UserProfile(heightCentimeters: 180))
+        }
+    }
+
+    @Test("sees writes made through the writable connection")
+    func seesLaterWrites() throws {
+        let (writable, readOnly) = try seeded()
+
+        try writable.entries.save(
+            Entry(kind: .exercise, label: "Run", calories: 320, exerciseKind: .cardio, day: jan1)
+        )
+
+        #expect(try readOnly.entries.totals(on: jan1).netCalories == -120)
+    }
+}
+
 @Suite("Change notifications")
 struct ChangeNotificationTests {
     @Test("an entry write notifies entry listeners",

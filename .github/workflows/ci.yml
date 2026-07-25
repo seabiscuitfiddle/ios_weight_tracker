@@ -1,0 +1,93 @@
+name: CI
+
+# Two jobs, because they verify genuinely different things:
+#
+#   package  — runs the real test suite on Linux. All of Tally's logic lives in an SPM package
+#              precisely so this is possible: storage, goal arithmetic, LLM request and response
+#              handling, deep-link routing and formatting are all covered here, fast and for free.
+#
+#   app      — compiles the SwiftUI, WidgetKit and AppIntents code on a macOS runner. This is the
+#              only thing that can prove those compile at all, since they don't exist on Linux.
+#
+# NO SECRETS ARE REQUIRED. The app builds for the simulator with signing disabled, so this works
+# unchanged on forks and pull requests. See README, "GitHub Actions secrets".
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push makes an in-flight run redundant.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SQLite headers
+        # GRDB compiles against <sqlite3.h>, which Ubuntu ships separately. Apple platforms get
+        # SQLite from the SDK, so this is a Linux-only prerequisite.
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test
+
+  app:
+    name: App build (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_16.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        # The .xcodeproj is not committed; it is regenerated from project.yml on every run,
+        # which also means a broken manifest fails here rather than on someone's machine.
+        run: xcodegen generate
+
+      - name: Build and test
+        # CODE_SIGNING_ALLOWED=NO is what keeps this secret-free: a simulator build needs no
+        # team, no certificate, and no provisioning profile.
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Tally.xcodeproj \
+            -scheme TallyApp \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build test | xcbeautify --renderer github-actions
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs
+          path: ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

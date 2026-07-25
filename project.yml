@@ -1,0 +1,166 @@
+# XcodeGen manifest — run `xcodegen generate` to produce Tally.xcodeproj.
+#
+# The .xcodeproj is generated and gitignored on purpose. A .pbxproj is thousands of lines of
+# machine-written XML that merges badly and cannot be reviewed; this file is the same
+# information in a form a human can read and a diff can show.
+#
+# ┌─────────────────────────────────────────────────────────────────────────────────────┐
+# │ VALUES YOU MUST CHANGE BEFORE BUILDING — see README "What you must fill in"          │
+# │                                                                                      │
+# │  1. BUNDLE_ID_PREFIX below → a reverse-DNS prefix you control                        │
+# │  2. DEVELOPMENT_TEAM below → your 10-character Apple Developer Team ID               │
+# │  3. Register the App Group `group.<prefix>.tally` in the developer portal            │
+# │                                                                                      │
+# │ The App Group is the one that fails quietly: a mismatch between here and the portal  │
+# │ produces a widget that is permanently empty, with no build error to explain it.      │
+# └─────────────────────────────────────────────────────────────────────────────────────┘
+
+name: Tally
+
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: true
+
+# Referenced below as ${BUNDLE_ID_PREFIX}. Changing it here updates the app, the widget, the
+# App Group, and the keychain group together — they must agree.
+settings:
+  base:
+    BUNDLE_ID_PREFIX: com.example
+    # Leave empty to build for the simulator without signing. Fill in to run on a device.
+    DEVELOPMENT_TEAM: ""
+    SWIFT_VERSION: "6.0"
+    # Warnings-as-errors is off deliberately: a warning should not stop someone building the
+    # app to try it, and CI checks the same code with its own stricter settings.
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
+packages:
+  Tally:
+    path: .
+
+targets:
+  # ────────────────────────────────────────────────────────────────────────────────────
+  TallyApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: Tally
+        product: TallyCore
+      - package: Tally
+        product: TallyStore
+      - target: TallyWidget
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: Tally
+        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally
+        INFOPLIST_KEY_CFBundleDisplayName: Tally
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # Portrait only. Every screen in the design is a single portrait column, and a
+        # landscape layout would be a different design rather than a stretched one.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        CODE_SIGN_ENTITLEMENTS: App/Tally.entitlements
+        ENABLE_PREVIEWS: YES
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Tally
+        UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
+
+        # Opens the widget's quick-log buttons. Must match DeepLink.scheme in TallyCore —
+        # changing one without the other breaks every button with no error.
+        CFBundleURLTypes:
+          - CFBundleURLName: ${BUNDLE_ID_PREFIX}.tally.deeplink
+            CFBundleURLSchemes: [tally]
+
+        # Permission strings. iOS terminates the app on first use of a capability whose
+        # description is missing, so an omission here is a crash, not a missing feature.
+        NSCameraUsageDescription: >-
+          Take a photo of a meal to estimate its calories and macros.
+        NSPhotoLibraryUsageDescription: >-
+          Choose a photo of a meal to estimate its calories and macros.
+        NSMicrophoneUsageDescription: >-
+          Describe what you ate out loud instead of typing it.
+        NSSpeechRecognitionUsageDescription: >-
+          Speech is transcribed on your device to turn what you say into a log entry.
+        NSHealthShareUsageDescription: >-
+          Read your weight and workouts from Health so Tally can fill them in for you.
+
+        # Archivo, added by you — see README. The app falls back to the system font when
+        # these files are absent, so a missing font looks wrong rather than crashing.
+        UIAppFonts:
+          - Archivo-Regular.ttf
+          - Archivo-SemiBold.ttf
+          - Archivo-ExtraBold.ttf
+
+  # ────────────────────────────────────────────────────────────────────────────────────
+  TallyWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widget
+    dependencies:
+      - package: Tally
+        product: TallyCore
+      - package: Tally
+        product: TallyStore
+    settings:
+      base:
+        PRODUCT_NAME: TallyWidget
+        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally.widget
+        CODE_SIGN_ENTITLEMENTS: Widget/TallyWidget.entitlements
+        ENABLE_PREVIEWS: YES
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Tally
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  # ────────────────────────────────────────────────────────────────────────────────────
+  TallyAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: TallyApp
+      - package: Tally
+        product: TallyCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  TallyAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: AppUITests
+    dependencies:
+      - target: TallyApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  TallyApp:
+    build:
+      targets:
+        TallyApp: all
+        TallyWidget: all
+    test:
+      targets:
+        - TallyAppTests
+        - TallyAppUITests
+      gatherCoverageData: true
+    run:
+      config: Debug

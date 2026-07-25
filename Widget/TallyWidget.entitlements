@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Capabilities for the widget extension.
+
+  The App Group is how the widget reaches the database the app writes; it must be byte-identical
+  to the one in App/Tally.entitlements. Deliberately the only capability here — the widget reads
+  numbers and nothing else, so it gets no Health access and no keychain group.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.example.tally</string>
+    </array>
+</dict>
+</plist>

@@ -93,6 +93,22 @@ public enum TallyDatabase {
         return stores(writer: try openReadWrite(at: url))
     }
 
+    /// Read-only stores for the widget extension.
+    ///
+    /// Every write through these throws ``StoreWriteError/readOnlyConnection``. The widget has
+    /// nothing to write, so making that structural means a mistake shows up as a clear error
+    /// rather than a crash — or worse, a widget process quietly migrating the schema out from
+    /// under the running app.
+    public static func readOnlyStores(reader: any DatabaseReader) -> StoreBundle {
+        let changes = DataChangeBroadcaster()
+        return StoreBundle(
+            entries: SQLiteEntryStore(reader: reader, changes: changes),
+            weights: SQLiteWeightStore(reader: reader, changes: changes),
+            settings: SQLiteSettingsStore(reader: reader, changes: changes),
+            changes: changes
+        )
+    }
+
     /// Convenience for tests and previews.
     public static func inMemoryStores() throws -> StoreBundle {
         stores(writer: try openInMemory())

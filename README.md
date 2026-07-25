@@ -223,14 +223,28 @@ anyone who has the app.
 | Phase | State |
 |---|---|
 | 1. Toolchain, package scaffold | Done |
-| 2. Domain model and storage | In progress |
-| 3. Goal engine | Not started |
-| 4. LLM nutrition parser | Not started |
-| 5. Xcode project, design system, CI | Not started |
-| 6. Screens | Not started |
-| 7. Widgets and deep links | Not started |
+| 2. Domain model and storage | Done — 175 tests |
+| 3. Goal engine | Done |
+| 4. LLM nutrition parser | Done |
+| 5. Xcode project, design system, CI | Done |
+| 6. Screens | Today, Log, History, Progress, Settings built — not yet run |
+| 7. Widgets and deep links | Both widgets and routing built — not yet run |
 | 8. HealthKit, voice, Siri | Not started |
-| 9. Polish, UI tests, docs | Not started |
+| 9. Polish, UI tests, docs | Smoke tests written; polish pending |
+
+> ⚠️ **The app and widget targets have never been compiled.** They were written on a Linux
+> machine, where SwiftUI, WidgetKit, and the Keychain APIs do not exist. The package (everything
+> under `Sources/`) is built and tested continuously and is known good; everything under `App/`
+> and `Widget/` is unverified until CI runs on a macOS runner or you open it in Xcode. **Expect
+> to fix compile errors on the first build.** They should be shallow — missing imports, renamed
+> SwiftUI modifiers — because the logic those files call into is already tested.
+
+Still to do:
+
+- HealthKit import, on-device voice transcription, and Siri/App Shortcuts (phase 8)
+- Photo capture in the Log screen — the parser handles images, the picker isn't wired yet
+- Editing an existing entry's macros; the Log screen's saved cards can currently only be deleted
+- A real first-run onboarding flow, rather than sending new users to Settings
 
 `design/tally-design.html` is the source design, kept for reference. Open it in a browser to see
 the six specified surfaces.

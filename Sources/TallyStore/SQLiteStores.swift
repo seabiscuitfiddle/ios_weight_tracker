@@ -2,18 +2,46 @@ import Foundation
 import GRDB
 import TallyCore
 
+/// Thrown when a write is attempted through a read-only connection.
+///
+/// Reaching this is a programming error rather than a user-facing condition — the widget is the
+/// only read-only consumer, and it has nothing to write. It exists so that mistake surfaces as a
+/// clear error instead of a crash inside GRDB.
+public enum StoreWriteError: Error, CustomStringConvertible {
+    case readOnlyConnection
+
+    public var description: String {
+        "This store was opened read-only and cannot be written to."
+    }
+}
+
 /// SQLite-backed ``EntryStore``.
 ///
 /// The aggregate queries (`totals`) are computed in SQL rather than by fetching rows and
 /// summing in Swift. Not for speed at this data size — it's so that the widget, which wants one
 /// number and nothing else, doesn't have to read and decode a day's worth of rows to get it.
 public final class SQLiteEntryStore: EntryStore {
-    private let writer: any DatabaseWriter
+    private let reader: any DatabaseReader
+    /// Nil for a read-only connection, such as the widget's. Writes then throw rather than
+    /// failing silently or crashing.
+    private let writer: (any DatabaseWriter)?
     private let changes: DataChangeBroadcaster
 
     public init(writer: any DatabaseWriter, changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.reader = writer
         self.writer = writer
         self.changes = changes
+    }
+
+    public init(reader: any DatabaseReader, changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.reader = reader
+        self.writer = nil
+        self.changes = changes
+    }
+
+    private func requireWriter() throws -> any DatabaseWriter {
+        guard let writer else { throw StoreWriteError.readOnlyConnection }
+        return writer
     }
 
     // Newest first within a day, matching the in-memory store and the order the design's
@@ -21,7 +49,7 @@ public final class SQLiteEntryStore: EntryStore {
     private static let displayOrder = "ORDER BY day DESC, loggedAt DESC, id ASC"
 
     public func entries(on day: Day) throws -> [Entry] {
-        try writer.read { db in
+        try reader.read { db in
             try Row
                 .fetchAll(db, sql: "SELECT * FROM entry WHERE day = :day \(Self.displayOrder)",
                           arguments: ["day": day.description])
@@ -30,7 +58,7 @@ public final class SQLiteEntryStore: EntryStore {
     }
 
     public func entries(from start: Day, through end: Day) throws -> [Entry] {
-        try writer.read { db in
+        try reader.read { db in
             try Row
                 .fetchAll(db, sql: """
                     SELECT * FROM entry WHERE day >= :start AND day <= :end \(Self.displayOrder)
@@ -41,7 +69,7 @@ public final class SQLiteEntryStore: EntryStore {
     }
 
     public func entry(id: Entry.ID) throws -> Entry? {
-        try writer.read { db in
+        try reader.read { db in
             try Row
                 .fetchOne(db, sql: "SELECT * FROM entry WHERE id = :id",
                           arguments: ["id": id.uuidString])
@@ -55,7 +83,7 @@ public final class SQLiteEntryStore: EntryStore {
 
     public func save(_ entries: [Entry]) throws {
         guard !entries.isEmpty else { return }
-        try writer.write { db in
+        try requireWriter().write { db in
             for entry in entries {
                 try db.execute(sql: Self.upsertSQL, arguments: entry.databaseArguments)
             }
@@ -64,7 +92,7 @@ public final class SQLiteEntryStore: EntryStore {
     }
 
     public func delete(id: Entry.ID) throws {
-        try writer.write { db in
+        try requireWriter().write { db in
             try db.execute(sql: "DELETE FROM entry WHERE id = :id",
                            arguments: ["id": id.uuidString])
         }
@@ -72,7 +100,7 @@ public final class SQLiteEntryStore: EntryStore {
     }
 
     public func totals(on day: Day) throws -> DayTotals {
-        try writer.read { db in
+        try reader.read { db in
             let row = try Row.fetchOne(db, sql: """
                 \(Self.totalsSelect) FROM entry WHERE day = :day
                 """, arguments: ["day": day.description])
@@ -81,7 +109,7 @@ public final class SQLiteEntryStore: EntryStore {
     }
 
     public func totals(from start: Day, through end: Day) throws -> [Day: DayTotals] {
-        try writer.read { db in
+        try reader.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT day, \(Self.totalsColumns) FROM entry
                 WHERE day >= :start AND day <= :end
@@ -95,7 +123,7 @@ public final class SQLiteEntryStore: EntryStore {
     }
 
     public func externalIdentifiers(from start: Day, through end: Day) throws -> Set<String> {
-        try writer.read { db in
+        try reader.read { db in
             Set(try String.fetchAll(db, sql: """
                 SELECT externalIdentifier FROM entry
                 WHERE day >= :start AND day <= :end AND externalIdentifier IS NOT NULL
@@ -146,16 +174,29 @@ public final class SQLiteEntryStore: EntryStore {
 
 /// SQLite-backed ``WeightStore``. One sample per day, enforced by a UNIQUE index on `day`.
 public final class SQLiteWeightStore: WeightStore {
-    private let writer: any DatabaseWriter
+    private let reader: any DatabaseReader
+    private let writer: (any DatabaseWriter)?
     private let changes: DataChangeBroadcaster
 
     public init(writer: any DatabaseWriter, changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.reader = writer
         self.writer = writer
         self.changes = changes
     }
 
+    public init(reader: any DatabaseReader, changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.reader = reader
+        self.writer = nil
+        self.changes = changes
+    }
+
+    private func requireWriter() throws -> any DatabaseWriter {
+        guard let writer else { throw StoreWriteError.readOnlyConnection }
+        return writer
+    }
+
     public func sample(on day: Day) throws -> WeightSample? {
-        try writer.read { db in
+        try reader.read { db in
             try Row.fetchOne(db, sql: "SELECT * FROM weightSample WHERE day = :day",
                              arguments: ["day": day.description])
                 .map(WeightSample.init(row:))
@@ -163,7 +204,7 @@ public final class SQLiteWeightStore: WeightStore {
     }
 
     public func samples(from start: Day, through end: Day) throws -> [WeightSample] {
-        try writer.read { db in
+        try reader.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM weightSample
                 WHERE day >= :start AND day <= :end ORDER BY day ASC
@@ -173,14 +214,14 @@ public final class SQLiteWeightStore: WeightStore {
     }
 
     public func allSamples() throws -> [WeightSample] {
-        try writer.read { db in
+        try reader.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM weightSample ORDER BY day ASC")
                 .map(WeightSample.init(row:))
         }
     }
 
     public func latestSample(onOrBefore day: Day) throws -> WeightSample? {
-        try writer.read { db in
+        try reader.read { db in
             try Row.fetchOne(db, sql: """
                 SELECT * FROM weightSample WHERE day <= :day ORDER BY day DESC LIMIT 1
                 """, arguments: ["day": day.description])
@@ -192,7 +233,7 @@ public final class SQLiteWeightStore: WeightStore {
     /// reading, not accumulate two rows — and the caller shouldn't have to look up the existing
     /// row's id to achieve that.
     public func save(_ sample: WeightSample) throws {
-        try writer.write { db in
+        try requireWriter().write { db in
             try db.execute(sql: """
                 INSERT INTO weightSample (id, day, pounds, measuredAt, source, externalIdentifier)
                 VALUES (:id, :day, :pounds, :measuredAt, :source, :externalIdentifier)
@@ -205,7 +246,7 @@ public final class SQLiteWeightStore: WeightStore {
     }
 
     public func delete(id: WeightSample.ID) throws {
-        try writer.write { db in
+        try requireWriter().write { db in
             try db.execute(sql: "DELETE FROM weightSample WHERE id = :id",
                            arguments: ["id": id.uuidString])
         }
@@ -215,12 +256,25 @@ public final class SQLiteWeightStore: WeightStore {
 
 /// SQLite-backed ``SettingsStore``, holding both settings objects as JSON in one row.
 public final class SQLiteSettingsStore: SettingsStore {
-    private let writer: any DatabaseWriter
+    private let reader: any DatabaseReader
+    private let writer: (any DatabaseWriter)?
     private let changes: DataChangeBroadcaster
 
     public init(writer: any DatabaseWriter, changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.reader = writer
         self.writer = writer
         self.changes = changes
+    }
+
+    public init(reader: any DatabaseReader, changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.reader = reader
+        self.writer = nil
+        self.changes = changes
+    }
+
+    private func requireWriter() throws -> any DatabaseWriter {
+        guard let writer else { throw StoreWriteError.readOnlyConnection }
+        return writer
     }
 
     public func profile() throws -> UserProfile {
@@ -246,7 +300,7 @@ public final class SQLiteSettingsStore: SettingsStore {
     // MARK: Private
 
     private func load() throws -> (profile: UserProfile, goal: GoalSettings)? {
-        try writer.read { db in
+        try reader.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM settings WHERE id = 1")
             else { return nil }
 
@@ -272,7 +326,7 @@ public final class SQLiteSettingsStore: SettingsStore {
         let profileJSON = String(decoding: try encoder.encode(profile), as: UTF8.self)
         let goalJSON = String(decoding: try encoder.encode(goal), as: UTF8.self)
 
-        try writer.write { db in
+        try requireWriter().write { db in
             try db.execute(sql: """
                 INSERT INTO settings (id, profileJSON, goalJSON)
                 VALUES (1, :profileJSON, :goalJSON)
