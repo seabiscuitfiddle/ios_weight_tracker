@@ -27,25 +27,28 @@ jobs:
   package:
     name: Package tests (Linux)
     runs-on: ubuntu-24.04
+    # The official Swift image rather than a setup action. Two reasons: it pins the exact
+    # toolchain developers use, and it removes a dependency on a third-party action's list of
+    # known versions — asking that action for "6.3" failed with `Version "6.3" is not available`
+    # even though 6.3 exists, because its manifest lags releases.
+    #
+    # Must stay 6.1 or newer. GRDB's manifest requires swift-tools-version 6.1, and on an older
+    # toolchain SPM quietly resolves *backwards* to a GRDB release that predates its Linux
+    # snapshot guard, which then fails to link. See Package.swift.
+    container: swift:6.3.1
     steps:
       - uses: actions/checkout@v4
 
       - name: Install SQLite headers
-        # GRDB compiles against <sqlite3.h>, which Ubuntu ships separately. Apple platforms get
-        # SQLite from the SDK, so this is a Linux-only prerequisite.
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-
-      - uses: swift-actions/setup-swift@v2
-        with:
-          # Must be 6.1 or newer, and should track whatever developers run. GRDB's manifest
-          # requires swift-tools-version 6.1; on an older toolchain SPM quietly resolves
-          # *backwards* to a GRDB release that predates its Linux snapshot guard, and the build
-          # dies with undefined sqlite3_snapshot_* symbols. See Package.swift.
-          swift-version: "6.3"
+        # GRDB compiles against <sqlite3.h>, which Debian/Ubuntu ship separately. Apple platforms
+        # get SQLite from the SDK, so this is a Linux-only prerequisite. No sudo: container steps
+        # already run as root.
+        run: apt-get update && apt-get install -y libsqlite3-dev
 
       - name: Verify toolchain
-        # Checked explicitly so the failure names the real problem. Without this, too old a
-        # toolchain surfaces as a linker error deep inside a dependency.
+        # Kept even though the container pins the version, so that editing the image tag to
+        # something too old fails here with an explanation instead of as a linker error deep
+        # inside a dependency.
         run: |
           swift --version
           version=$(swift --version 2>&1 | grep -oE 'Swift version [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -1)
