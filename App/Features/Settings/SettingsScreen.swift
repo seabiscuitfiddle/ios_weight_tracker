@@ -40,6 +40,16 @@ struct SettingsScreen: View {
                 }
             }
             .onAppear(perform: load)
+            .onChange(of: profile.heightUnit) { previous, _ in
+                // The centimetre row edits a text buffer that is only committed on save. Commit
+                // it before it disappears, and refill it when it comes back, so toggling units
+                // never drops what was typed.
+                if previous == .centimeters {
+                    profile.heightCentimeters = Self.number(from: heightText)
+                } else {
+                    heightText = Self.heightText(from: profile.heightCentimeters)
+                }
+            }
             .alert("Couldn't save", isPresented: Binding(
                 get: { saveError != nil },
                 set: { if !$0 { saveError = nil } }
@@ -134,17 +144,15 @@ struct SettingsScreen: View {
                 displayedComponents: .date
             )
 
-            HStack {
-                Text("Height")
-                Spacer()
-                TextField("cm", text: $heightText)
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 80)
-                Text("cm").foregroundStyle(.secondary)
+            heightRow
+
+            Picker("Height units", selection: $profile.heightUnit) {
+                ForEach(HeightUnit.allCases, id: \.self) {
+                    Text($0.displayName).tag($0)
+                }
             }
 
-            Picker("Units", selection: $profile.massUnit) {
+            Picker("Weight units", selection: $profile.massUnit) {
                 ForEach(MassUnit.allCases, id: \.self) {
                     Text($0.shortName).tag($0)
                 }
@@ -166,6 +174,84 @@ struct SettingsScreen: View {
                 them here too would credit them twice.
                 """)
         }
+    }
+
+    /// Feet and inches get two menus rather than a text field: nobody thinks of themselves as
+    /// 5.83 feet tall, and a short list can't be mistyped. Centimetres stay a plain field —
+    /// one number, and a 200-entry menu would be worse than typing it.
+    @ViewBuilder private var heightRow: some View {
+        switch profile.heightUnit {
+        case .feetInches:
+            HStack {
+                Text("Height")
+                Spacer()
+                Picker("Feet", selection: feetSelection) {
+                    Text("—").tag(Int?.none)
+                    ForEach(Height.feetRange, id: \.self) { feet in
+                        Text("\(feet) ft").tag(Int?.some(feet))
+                    }
+                }
+                .accessibilityLabel("Height, feet")
+
+                // Withheld until there is a height at all: beside an unset "—", a "0 in" would
+                // read as a stated zero rather than as nothing entered yet.
+                if profile.heightCentimeters != nil {
+                    Picker("Inches", selection: inchesSelection) {
+                        ForEach(0..<Height.inchesPerFoot, id: \.self) { inches in
+                            Text("\(inches) in").tag(inches)
+                        }
+                    }
+                    .accessibilityLabel("Height, inches")
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+        case .centimeters:
+            HStack {
+                Text("Height")
+                Spacer()
+                TextField("cm", text: $heightText)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                Text("cm").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Whole feet, or nil when no height is set. Picking "—" clears the height, which the goal
+    /// engine reads as "estimate expenditure from observed data instead" rather than as an error.
+    ///
+    /// Both bindings write straight back to canonical centimetres, so switching units mid-edit
+    /// can't leave two disagreeing copies of the same fact. A foot/inch round trip moves the
+    /// stored value by up to half an inch, which is worth about a kilocalorie of BMR.
+    private var feetSelection: Binding<Int?> {
+        Binding(
+            get: { profile.heightCentimeters.map { Height.feetAndInches(fromCentimeters: $0).feet } },
+            set: { feet in
+                guard let feet else {
+                    profile.heightCentimeters = nil
+                    return
+                }
+                profile.heightCentimeters = Height.centimeters(feet: feet, inches: currentInches ?? 0)
+            }
+        )
+    }
+
+    private var inchesSelection: Binding<Int> {
+        Binding(
+            get: { currentInches ?? 0 },
+            set: { inches in
+                let feet = profile.heightCentimeters
+                    .map { Height.feetAndInches(fromCentimeters: $0).feet }
+                profile.heightCentimeters = Height.centimeters(feet: feet ?? 5, inches: inches)
+            }
+        )
+    }
+
+    private var currentInches: Int? {
+        profile.heightCentimeters.map { Height.feetAndInches(fromCentimeters: $0).inches }
     }
 
     @ViewBuilder private var goalSection: some View {
@@ -227,7 +313,7 @@ struct SettingsScreen: View {
             saveError = String(describing: error)
         }
 
-        heightText = profile.heightCentimeters.map { String(format: "%.0f", $0) } ?? ""
+        heightText = Self.heightText(from: profile.heightCentimeters)
         targetWeightText = goal.targetPounds
             .map { String(format: "%.1f", profile.massUnit.value(fromPounds: $0)) } ?? ""
         apiKey = (try? environment.keyStore.apiKey()) ?? ""
@@ -235,8 +321,11 @@ struct SettingsScreen: View {
 
     private func save() {
         // Parsed leniently: someone typing "178 cm" or using a comma decimal separator meant a
-        // height, and refusing it would be pedantry.
-        profile.heightCentimeters = Self.number(from: heightText)
+        // height, and refusing it would be pedantry. The foot/inch pickers write through to the
+        // profile as they are used, so there is nothing to commit for them here.
+        if profile.heightUnit == .centimeters {
+            profile.heightCentimeters = Self.number(from: heightText)
+        }
         goal.targetPounds = Self.number(from: targetWeightText)
             .map { profile.massUnit.pounds(from: $0) }
 
@@ -248,6 +337,10 @@ struct SettingsScreen: View {
         } catch {
             saveError = String(describing: error)
         }
+    }
+
+    private static func heightText(from centimeters: Double?) -> String {
+        centimeters.map { String(format: "%.0f", $0) } ?? ""
     }
 
     private static func number(from text: String) -> Double? {

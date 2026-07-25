@@ -77,18 +77,37 @@ public struct UserProfile: Hashable, Sendable, Codable {
 
     public var massUnit: MassUnit
 
+    /// Display and entry only — ``heightCentimeters`` stays canonical either way.
+    public var heightUnit: HeightUnit
+
     public init(
         birthDate: Date? = nil,
         heightCentimeters: Double? = nil,
         biologicalSex: BiologicalSex = .unspecified,
         activityLevel: ActivityLevel = .light,
-        massUnit: MassUnit = .pounds
+        massUnit: MassUnit = .pounds,
+        heightUnit: HeightUnit = .feetInches
     ) {
         self.birthDate = birthDate
         self.heightCentimeters = heightCentimeters
         self.biologicalSex = biologicalSex
         self.activityLevel = activityLevel
         self.massUnit = massUnit
+        self.heightUnit = heightUnit
+    }
+
+    /// Hand-written so that a profile saved before height units were selectable still decodes.
+    /// A missing key there isn't corruption, and failing the whole settings load over it would
+    /// take the goal engine's height and age down with it.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        birthDate = try container.decodeIfPresent(Date.self, forKey: .birthDate)
+        heightCentimeters = try container.decodeIfPresent(Double.self, forKey: .heightCentimeters)
+        biologicalSex = try container.decode(BiologicalSex.self, forKey: .biologicalSex)
+        activityLevel = try container.decode(ActivityLevel.self, forKey: .activityLevel)
+        massUnit = try container.decode(MassUnit.self, forKey: .massUnit)
+        // Those profiles were entered in centimetres, which is what the field meant at the time.
+        heightUnit = try container.decodeIfPresent(HeightUnit.self, forKey: .heightUnit) ?? .centimeters
     }
 
     public static let `default` = UserProfile()
