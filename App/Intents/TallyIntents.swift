@@ -13,17 +13,19 @@ enum TallyServices {
         try TallyDatabase.open().stores
     }
 
-    static func parser(model: String = ParserConfiguration.default.model) -> any NutritionParser {
-        AnthropicNutritionParser(
-            transport: URLSessionTransport.makeDefault(),
-            keyStore: KeychainAPIKeyStore.forCurrentBundle(),
-            configuration: ParserConfiguration(
-                model: model,
-                effort: ParserConfiguration.default.effort,
-                maxTokens: ParserConfiguration.default.maxTokens,
-                baseURL: ParserConfiguration.default.baseURL
-            )
-        )
+    /// The parser the user's stored settings describe.
+    ///
+    /// Reads the choice from storage rather than taking it as an argument, because an intent
+    /// invoked by Siri has no app process to ask. Falls back to the default provider if settings
+    /// can't be read at all — a spoken entry that fails because the database is busy would be
+    /// mystifying.
+    static func parser(_ stores: StoreBundle? = nil) -> any NutritionParser {
+        var settings = AISettings.default
+        if let resolved = stores ?? (try? Self.stores()),
+           let stored = try? resolved.settings.aiSettings() {
+            settings = stored
+        }
+        return ParserFactory.make(settings)
     }
 
     /// Today's goal, or nil when there isn't enough set up to compute one.
@@ -76,7 +78,7 @@ struct LogFoodOrExerciseIntent: AppIntent {
 
         let result: ParseResult
         do {
-            result = try await TallyServices.parser().parse(.text(text), context: context)
+            result = try await TallyServices.parser(stores).parse(.text(text), context: context)
         } catch let error as NutritionParserError {
             // Surfaced as spoken dialog rather than thrown, so Siri says something useful
             // instead of "there was a problem with the app".

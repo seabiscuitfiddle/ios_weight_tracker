@@ -113,6 +113,7 @@ public final class InMemorySettingsStore: SettingsStore {
     private struct State {
         var profile: UserProfile
         var goal: GoalSettings
+        var ai: AISettings
     }
 
     private let state: Mutex<State>
@@ -121,14 +122,16 @@ public final class InMemorySettingsStore: SettingsStore {
     public init(
         profile: UserProfile = .default,
         goal: GoalSettings = .default,
+        ai: AISettings = .default,
         changes: DataChangeBroadcaster = DataChangeBroadcaster()
     ) {
-        self.state = Mutex(State(profile: profile, goal: goal))
+        self.state = Mutex(State(profile: profile, goal: goal, ai: ai))
         self.changes = changes
     }
 
     public func profile() throws -> UserProfile { state.withLock { $0.profile } }
     public func goalSettings() throws -> GoalSettings { state.withLock { $0.goal } }
+    public func aiSettings() throws -> AISettings { state.withLock { $0.ai } }
 
     public func save(_ profile: UserProfile) throws {
         state.withLock { $0.profile = profile }
@@ -137,6 +140,11 @@ public final class InMemorySettingsStore: SettingsStore {
 
     public func save(_ goal: GoalSettings) throws {
         state.withLock { $0.goal = goal }
+        changes.send(.settings)
+    }
+
+    public func save(_ ai: AISettings) throws {
+        state.withLock { $0.ai = ai }
         changes.send(.settings)
     }
 }

@@ -1,8 +1,13 @@
 import Foundation
+import LLMWire
 import Security
 import TallyCore
 
-/// Stores the user's Anthropic API key in the iOS Keychain.
+/// Stores an AI provider's API key in the iOS Keychain.
+///
+/// One item per provider, keyed by ``LLMProvider/id``, so switching from OpenAI to OpenRouter and
+/// back doesn't mean pasting a key in again — and, more importantly, so a provider can never read
+/// a key the user entered for a different company.
 ///
 /// The Keychain rather than `UserDefaults` because this is a credential that can spend the
 /// user's money. `UserDefaults` is a plist in the app container: readable from a filesystem
@@ -23,14 +28,43 @@ public struct KeychainAPIKeyStore: APIKeyStore {
         self.account = account
     }
 
+    /// The store for one provider.
+    ///
     /// Keyed off the running bundle, so changing `BUNDLE_ID_PREFIX` doesn't silently orphan a
-    /// previously stored key under a service name nothing looks up any more.
+    /// previously stored key under a service name nothing looks up any more. The provider id is
+    /// the *account*, so all of them live under one service and can be enumerated.
     public static func forCurrentBundle(
-        bundle: Bundle = .main,
-        suffix: String = "anthropic"
+        providerID: String,
+        bundle: Bundle = .main
     ) -> KeychainAPIKeyStore {
         let base = bundle.bundleIdentifier ?? "tally"
-        return KeychainAPIKeyStore(service: "\(base).\(suffix)")
+        return KeychainAPIKeyStore(service: "\(base).ai", account: providerID)
+    }
+
+    /// The pre-provider key location: one item, service `<bundle>.anthropic`, account `api-key`.
+    ///
+    /// Kept only so ``migrateLegacyAnthropicKey(bundle:)`` can find it. A user who set up Tally
+    /// before providers were configurable should not have to go and find their key again.
+    static func legacyAnthropicStore(bundle: Bundle = .main) -> KeychainAPIKeyStore {
+        KeychainAPIKeyStore(service: "\(bundle.bundleIdentifier ?? "tally").anthropic")
+    }
+
+    /// Moves a key written by an older build into its per-provider home.
+    ///
+    /// Copies rather than moves, and only when the new location is empty. Deleting the old item
+    /// would make downgrading lose the key, and the stale copy is harmless: nothing reads it
+    /// after this.
+    @discardableResult
+    public static func migrateLegacyAnthropicKey(bundle: Bundle = .main) -> Bool {
+        let destination = forCurrentBundle(providerID: LLMProvider.anthropic.id, bundle: bundle)
+        let existing = try? destination.apiKey()
+        guard existing == nil || existing?.isEmpty == true,
+              let legacy = try? legacyAnthropicStore(bundle: bundle).apiKey(),
+              !legacy.isEmpty
+        else { return false }
+
+        try? destination.save(legacy)
+        return true
     }
 
     public func apiKey() throws -> String? {

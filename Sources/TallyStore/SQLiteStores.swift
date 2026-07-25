@@ -287,19 +287,31 @@ public final class SQLiteSettingsStore: SettingsStore {
 
     public func save(_ profile: UserProfile) throws {
         let existing = try load()
-        try store(profile: profile, goal: existing?.goal ?? .default)
+        try store(profile: profile, goal: existing?.goal ?? .default, ai: existing?.ai)
         changes.send(.settings)
     }
 
     public func save(_ goal: GoalSettings) throws {
         let existing = try load()
-        try store(profile: existing?.profile ?? .default, goal: goal)
+        try store(profile: existing?.profile ?? .default, goal: goal, ai: existing?.ai)
+        changes.send(.settings)
+    }
+
+    public func aiSettings() throws -> AISettings {
+        try load()?.ai ?? .default
+    }
+
+    public func save(_ ai: AISettings) throws {
+        let existing = try load()
+        try store(profile: existing?.profile ?? .default, goal: existing?.goal ?? .default, ai: ai)
         changes.send(.settings)
     }
 
     // MARK: Private
 
-    private func load() throws -> (profile: UserProfile, goal: GoalSettings)? {
+    private typealias Stored = (profile: UserProfile, goal: GoalSettings, ai: AISettings?)
+
+    private func load() throws -> Stored? {
         try reader.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM settings WHERE id = 1")
             else { return nil }
@@ -307,10 +319,15 @@ public final class SQLiteSettingsStore: SettingsStore {
             let decoder = JSONDecoder()
             let profileJSON: String = row["profileJSON"]
             let goalJSON: String = row["goalJSON"]
+            // Null until the user has chosen a provider, which is not the same as having chosen
+            // the default one — and a row written before the column existed reads as null too.
+            let aiJSON: String? = row["aiJSON"]
+
             do {
                 return (
                     try decoder.decode(UserProfile.self, from: Data(profileJSON.utf8)),
-                    try decoder.decode(GoalSettings.self, from: Data(goalJSON.utf8))
+                    try decoder.decode(GoalSettings.self, from: Data(goalJSON.utf8)),
+                    try aiJSON.map { try decoder.decode(AISettings.self, from: Data($0.utf8)) }
                 )
             } catch {
                 throw StoreDecodingError.malformedSettingsJSON(String(describing: error))
@@ -318,20 +335,24 @@ public final class SQLiteSettingsStore: SettingsStore {
         }
     }
 
-    private func store(profile: UserProfile, goal: GoalSettings) throws {
+    private func store(profile: UserProfile, goal: GoalSettings, ai: AISettings?) throws {
         let encoder = JSONEncoder()
         // Sorted keys so an unchanged settings object serialises byte-identically, which keeps
         // diffs and any future change detection meaningful.
         encoder.outputFormatting = [.sortedKeys]
         let profileJSON = String(decoding: try encoder.encode(profile), as: UTF8.self)
         let goalJSON = String(decoding: try encoder.encode(goal), as: UTF8.self)
+        let aiJSON = try ai.map { String(decoding: try encoder.encode($0), as: UTF8.self) }
 
         try requireWriter().write { db in
             try db.execute(sql: """
-                INSERT INTO settings (id, profileJSON, goalJSON)
-                VALUES (1, :profileJSON, :goalJSON)
-                ON CONFLICT(id) DO UPDATE SET profileJSON = :profileJSON, goalJSON = :goalJSON
-                """, arguments: ["profileJSON": profileJSON, "goalJSON": goalJSON])
+                INSERT INTO settings (id, profileJSON, goalJSON, aiJSON)
+                VALUES (1, :profileJSON, :goalJSON, :aiJSON)
+                ON CONFLICT(id) DO UPDATE SET
+                    profileJSON = :profileJSON, goalJSON = :goalJSON, aiJSON = :aiJSON
+                """, arguments: [
+                    "profileJSON": profileJSON, "goalJSON": goalJSON, "aiJSON": aiJSON,
+                ])
         }
     }
 }

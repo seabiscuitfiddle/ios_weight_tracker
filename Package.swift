@@ -1,19 +1,25 @@
 // swift-tools-version:6.0
 import PackageDescription
 
-// Tally's logic lives here, deliberately split in two so the storage choice is a
-// structural boundary rather than a convention:
+// Tally's logic lives here, deliberately split so each external choice is a structural
+// boundary rather than a convention:
 //
-//   TallyCore  — models, store protocols, goal math, LLM parsing, routing. No dependencies.
+//   LLMWire    — provider-agnostic LLM calling. Knows nothing about Tally, depends on nothing,
+//                and is MIT licensed rather than GPL so it can be lifted into its own
+//                repository with a `git mv`. See Sources/LLMWire/README.md.
+//   TallyCore  — models, store protocols, goal math, nutrition parsing, routing. Its only
+//                dependency is LLMWire.
 //   TallyStore — the GRDB/SQLite conformances of those protocols. The only target that
 //                links GRDB, so feature code cannot reach a database type by accident.
 //
 // Swapping SQLite for something else (SwiftData, plain files) means adding a target
-// alongside TallyStore; nothing in TallyCore or the app's feature code changes.
+// alongside TallyStore; nothing in TallyCore or the app's feature code changes. Likewise,
+// adding an LLM provider means adding a value in LLMWire, not a branch in a screen.
 let package = Package(
     name: "Tally",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
+        .library(name: "LLMWire", targets: ["LLMWire"]),
         .library(name: "TallyCore", targets: ["TallyCore"]),
         .library(name: "TallyStore", targets: ["TallyStore"]),
     ],
@@ -33,7 +39,14 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
     ],
     targets: [
-        .target(name: "TallyCore"),
+        .target(
+            name: "LLMWire",
+            // Its own licence and readme travel with the source so the directory stays a
+            // complete, separately-licensed package. Excluded because SPM otherwise warns about
+            // files it doesn't know how to build.
+            exclude: ["LICENSE", "README.md"]
+        ),
+        .target(name: "TallyCore", dependencies: ["LLMWire"]),
         .target(
             name: "TallyStore",
             dependencies: [
@@ -41,7 +54,8 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
         ),
-        .testTarget(name: "TallyCoreTests", dependencies: ["TallyCore"]),
+        .testTarget(name: "LLMWireTests", dependencies: ["LLMWire"]),
+        .testTarget(name: "TallyCoreTests", dependencies: ["TallyCore", "LLMWire"]),
         .testTarget(name: "TallyStoreTests", dependencies: ["TallyStore", "TallyCore"]),
     ]
 )

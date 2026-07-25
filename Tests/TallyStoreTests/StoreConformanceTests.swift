@@ -401,6 +401,63 @@ struct SettingsStoreTests {
         #expect(loaded.targetPounds == nil)
         #expect(loaded.manualCalorieGoal == nil)
     }
+
+    /// The provider choice has to be *stored*, not held in the app: an App Intent invoked by Siri
+    /// runs with no app process behind it and reads it from here.
+    @Test("round-trips the AI provider choice", arguments: StoreImplementation.allCases)
+    func roundTripsAISettings(_ implementation: StoreImplementation) throws {
+        let store = try implementation.makeStores().settings
+        #expect(try store.aiSettings() == .default)
+
+        var ai = AISettings.default
+        ai.select(.openRouter)
+        ai.model = "qwen/qwen3-vl-plus"
+        ai.effort = "medium"
+        try store.save(ai)
+
+        let loaded = try store.aiSettings()
+        #expect(loaded == ai)
+        #expect(loaded.provider.id == "openrouter")
+        #expect(loaded.parserConfiguration.model == "qwen/qwen3-vl-plus")
+    }
+
+    /// Nothing shipped can reconstruct a user's own endpoint, so unlike the built-in providers it
+    /// has to survive storage whole.
+    @Test("stores a custom endpoint whole", arguments: StoreImplementation.allCases)
+    func roundTripsCustomProvider(_ implementation: StoreImplementation) throws {
+        let store = try implementation.makeStores().settings
+        var ai = AISettings.default
+        ai.select(.custom(
+            id: "lan-ollama",
+            displayName: "Ollama",
+            baseURL: URL(string: "http://192.168.1.20:11434/v1")!,
+            defaultModel: "llama3.2"
+        ))
+        try store.save(ai)
+
+        let loaded = try store.aiSettings()
+        #expect(loaded.provider.id == "lan-ollama")
+        #expect(loaded.provider.endpoint.host == "192.168.1.20")
+        #expect(loaded.provider.requiresAPIKey == false)
+        #expect(loaded.model == "llama3.2")
+    }
+
+    /// Three objects now share one row, so a partial write is an even easier way to lose data
+    /// than it was with two.
+    @Test("saving the profile leaves the provider choice intact",
+          arguments: StoreImplementation.allCases)
+    func savingProfilePreservesAISettings(_ implementation: StoreImplementation) throws {
+        let store = try implementation.makeStores().settings
+        var ai = AISettings.default
+        ai.select(.deepSeek)
+        try store.save(ai)
+
+        try store.save(UserProfile(heightCentimeters: 181, biologicalSex: .male))
+        #expect(try store.aiSettings().providerID == "deepseek")
+
+        try store.save(GoalSettings(targetPounds: 155))
+        #expect(try store.aiSettings().providerID == "deepseek")
+    }
 }
 
 /// The widget opens the shared database read-only. These pin that reads still work and writes
