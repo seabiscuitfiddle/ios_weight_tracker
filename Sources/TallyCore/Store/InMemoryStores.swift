@@ -8,8 +8,10 @@ import Foundation
 /// tested without a database at all.
 public final class InMemoryEntryStore: EntryStore {
     private let state = Mutex<[Entry.ID: Entry]>([:])
+    private let changes: DataChangeBroadcaster
 
-    public init(_ entries: [Entry] = []) {
+    public init(_ entries: [Entry] = [], changes: DataChangeBroadcaster = DataChangeBroadcaster()) {
+        self.changes = changes
         state.withLock { store in
             for entry in entries { store[entry.id] = entry }
         }
@@ -29,17 +31,20 @@ public final class InMemoryEntryStore: EntryStore {
     }
 
     public func save(_ entry: Entry) throws {
-        state.withLock { $0[entry.id] = entry }
+        try save([entry])
     }
 
     public func save(_ entries: [Entry]) throws {
+        guard !entries.isEmpty else { return }
         state.withLock { store in
             for entry in entries { store[entry.id] = entry }
         }
+        changes.send(.entries)
     }
 
     public func delete(id: Entry.ID) throws {
         state.withLock { $0[id] = nil }
+        changes.send(.entries)
     }
 
     public func totals(on day: Day) throws -> DayTotals {
@@ -59,8 +64,13 @@ public final class InMemoryEntryStore: EntryStore {
 public final class InMemoryWeightStore: WeightStore {
     // Keyed by day, which is what enforces "at most one sample per day".
     private let state = Mutex<[Day: WeightSample]>([:])
+    private let changes: DataChangeBroadcaster
 
-    public init(_ samples: [WeightSample] = []) {
+    public init(
+        _ samples: [WeightSample] = [],
+        changes: DataChangeBroadcaster = DataChangeBroadcaster()
+    ) {
+        self.changes = changes
         state.withLock { store in
             for sample in samples { store[sample.day] = sample }
         }
@@ -86,6 +96,7 @@ public final class InMemoryWeightStore: WeightStore {
 
     public func save(_ sample: WeightSample) throws {
         state.withLock { $0[sample.day] = sample }
+        changes.send(.weights)
     }
 
     public func delete(id: WeightSample.ID) throws {
@@ -94,6 +105,7 @@ public final class InMemoryWeightStore: WeightStore {
                 store[key] = nil
             }
         }
+        changes.send(.weights)
     }
 }
 
@@ -104,29 +116,49 @@ public final class InMemorySettingsStore: SettingsStore {
     }
 
     private let state: Mutex<State>
+    private let changes: DataChangeBroadcaster
 
-    public init(profile: UserProfile = .default, goal: GoalSettings = .default) {
+    public init(
+        profile: UserProfile = .default,
+        goal: GoalSettings = .default,
+        changes: DataChangeBroadcaster = DataChangeBroadcaster()
+    ) {
         self.state = Mutex(State(profile: profile, goal: goal))
+        self.changes = changes
     }
 
     public func profile() throws -> UserProfile { state.withLock { $0.profile } }
-    public func save(_ profile: UserProfile) throws { state.withLock { $0.profile = profile } }
     public func goalSettings() throws -> GoalSettings { state.withLock { $0.goal } }
-    public func save(_ goal: GoalSettings) throws { state.withLock { $0.goal = goal } }
+
+    public func save(_ profile: UserProfile) throws {
+        state.withLock { $0.profile = profile }
+        changes.send(.settings)
+    }
+
+    public func save(_ goal: GoalSettings) throws {
+        state.withLock { $0.goal = goal }
+        changes.send(.settings)
+    }
 }
 
 extension StoreBundle {
     /// A fully in-memory bundle, for tests and SwiftUI previews.
+    ///
+    /// Shares one broadcaster across the three stores, exactly as the SQLite bundle does, so
+    /// change-notification behaviour is part of the reference semantics rather than something
+    /// only the real implementation has.
     public static func inMemory(
         entries: [Entry] = [],
         weights: [WeightSample] = [],
         profile: UserProfile = .default,
         goal: GoalSettings = .default
     ) -> StoreBundle {
-        StoreBundle(
-            entries: InMemoryEntryStore(entries),
-            weights: InMemoryWeightStore(weights),
-            settings: InMemorySettingsStore(profile: profile, goal: goal)
+        let changes = DataChangeBroadcaster()
+        return StoreBundle(
+            entries: InMemoryEntryStore(entries, changes: changes),
+            weights: InMemoryWeightStore(weights, changes: changes),
+            settings: InMemorySettingsStore(profile: profile, goal: goal, changes: changes),
+            changes: changes
         )
     }
 }
