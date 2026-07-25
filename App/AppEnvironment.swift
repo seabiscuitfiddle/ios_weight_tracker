@@ -14,7 +14,10 @@ import TallyStore
 @MainActor
 final class AppEnvironment {
     let stores: StoreBundle
-    let keyStore: KeychainAPIKeyStore
+
+    /// Which provider and model the parser is currently built from. Held here as well as in
+    /// storage so Settings has something to bind to without a read on every keystroke.
+    private(set) var aiSettings: AISettings = .default
 
     /// Set when no database could be opened at all, so nothing is being persisted. Surfaced
     /// rather than crashed on: a crash at launch tells the user nothing about how to fix it.
@@ -41,14 +44,16 @@ final class AppEnvironment {
     }
 
     init() {
-        let keyStore = KeychainAPIKeyStore.forCurrentBundle()
-        self.keyStore = keyStore
-
         if Self.isUITesting {
             self.stores = StoreBundle.inMemory()
             self.parser = StubNutritionParser()
             return
         }
+
+        // Before anything reads a key: an install that predates configurable providers has one
+        // sitting under the old single-provider name, and losing it would mean sending the user
+        // back to a console to mint another.
+        KeychainAPIKeyStore.migrateLegacyAnthropicKey()
 
         // Prefers the shared App Group container and falls back to the app's own, so a fresh
         // clone runs on a simulator without first registering an App Group. The fallback still
@@ -69,19 +74,32 @@ final class AppEnvironment {
                 """
         }
 
-        self.parser = TallyServices.parser()
+        let settings = (try? stores.settings.aiSettings()) ?? .default
+        self.aiSettings = settings
+        self.parser = ParserFactory.make(settings)
     }
 
     /// For previews and UI tests: entirely in memory, with a stub parser.
     init(previewStores: StoreBundle, parser: any NutritionParser = StubNutritionParser()) {
         self.stores = previewStores
-        self.keyStore = KeychainAPIKeyStore(service: "tally.preview")
         self.parser = parser
     }
 
-    /// Applies a model change from Settings.
-    func updateParserConfiguration(model: String) {
-        parser = TallyServices.parser(model: model)
+    /// Applies a provider or model change from Settings.
+    ///
+    /// Persists first, then rebuilds. The parser is a value built from the settings, so there is
+    /// no state to keep in step — a changed provider is simply a different parser from the next
+    /// call onward.
+    func updateAISettings(_ settings: AISettings) throws {
+        try stores.settings.save(settings)
+        aiSettings = settings
+        parser = ParserFactory.make(settings)
+    }
+
+    /// The keychain item for one provider. Each has its own, so switching between them doesn't
+    /// mean pasting a key in again — and no provider can read a key entered for another.
+    func keyStore(for providerID: String) -> KeychainAPIKeyStore {
+        KeychainAPIKeyStore.forCurrentBundle(providerID: providerID)
     }
 
     // MARK: Health import

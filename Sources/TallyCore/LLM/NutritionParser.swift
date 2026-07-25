@@ -1,4 +1,5 @@
 import Foundation
+import LLMWire
 
 /// What the user gave us to interpret.
 public enum ParseInput: Hashable, Sendable {
@@ -113,9 +114,9 @@ public struct ParseContext: Hashable, Sendable {
 
 /// Turns words or a photo into food and exercise numbers.
 ///
-/// A protocol so the app depends on the capability rather than on Anthropic specifically: the
-/// screens are testable against a stub, and swapping providers — or adding an on-device
-/// estimator later — touches nothing above this line.
+/// A protocol so the app depends on the capability rather than on any one vendor: the screens are
+/// testable against a stub, and the choice between a hosted provider and an on-device model is
+/// made in one place and invisible above this line.
 public protocol NutritionParser: Sendable {
     func parse(_ input: ParseInput, context: ParseContext) async throws -> ParseResult
 }
@@ -152,6 +153,16 @@ public enum NutritionParserError: Error, Hashable, Sendable {
     /// No key configured. Not really an error — the expected state until setup.
     case missingAPIKey
     case invalidAPIKey
+    /// The key works but the account is out of credit. Kept apart from ``invalidAPIKey`` because
+    /// the fix is different, and sending someone to re-check a key that is fine wastes their
+    /// evening.
+    case insufficientCredit(String?)
+    /// The chosen model doesn't exist at the chosen provider. Easy to reach now that the model is
+    /// free text: a typo, or an identifier the provider has since retired.
+    case unknownModel(String?)
+    /// A photo was offered to a provider or model that only reads text — DeepSeek's chat models,
+    /// most local runners.
+    case imagesUnsupported(provider: String)
     case rateLimited(retryAfter: TimeInterval?)
     case overloaded
     case requestTooLarge
@@ -171,7 +182,8 @@ public enum NutritionParserError: Error, Hashable, Sendable {
     public var isRetryable: Bool {
         switch self {
         case .rateLimited, .overloaded, .offline, .serverError, .truncated: true
-        case .missingAPIKey, .invalidAPIKey, .requestTooLarge, .refused,
+        case .missingAPIKey, .invalidAPIKey, .insufficientCredit, .unknownModel,
+             .imagesUnsupported, .requestTooLarge, .refused,
              .malformedResponse, .nothingRecognized: false
         }
     }
@@ -179,9 +191,19 @@ public enum NutritionParserError: Error, Hashable, Sendable {
     public var userMessage: String {
         switch self {
         case .missingAPIKey:
-            "Add an Anthropic API key in Settings to log by text, photo, or voice."
+            // Provider-neutral now that the user picks one: naming a vendor here would be wrong
+            // for everyone who chose a different one.
+            "Add an API key in Settings to log by text, photo, or voice."
         case .invalidAPIKey:
             "That API key was rejected. Check it in Settings."
+        case .insufficientCredit(let message):
+            // The provider explains a billing state far more precisely than this app could
+            // guess at, so its wording leads and ours only says what to do about it.
+            Self.sentence(message, then: "Top it up, or switch provider in Settings.")
+        case .unknownModel(let message):
+            Self.sentence(message, then: "Pick another model in Settings.")
+        case .imagesUnsupported(let provider):
+            "\(provider) can't read photos. Describe the food instead, or switch provider in Settings."
         case .rateLimited(let retryAfter):
             if let retryAfter, retryAfter > 0 {
                 "Rate limited. Try again in about \(Int(retryAfter.rounded())) seconds."
@@ -204,6 +226,41 @@ public enum NutritionParserError: Error, Hashable, Sendable {
             note ?? "No food or exercise found in that. Try naming what you ate."
         case .serverError:
             "The service had a problem. Try again in a moment."
+        }
+    }
+
+    /// The provider's own sentence followed by ours, punctuated so the two read as one message.
+    private static func sentence(_ message: String?, then advice: String) -> String {
+        guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty
+        else { return advice }
+
+        let punctuated = message.hasSuffix(".") || message.hasSuffix("!") || message.hasSuffix("?")
+            ? message
+            : message + "."
+        return "\(punctuated) \(advice)"
+    }
+
+    /// Translates a transport-level failure into the app's own vocabulary.
+    ///
+    /// The two enums look alike, and that is the point: `LLMWire` deliberately knows nothing
+    /// about food, so the sentence a user reads is written here, where the surrounding context —
+    /// that they were logging a meal and can always type it by hand — is known.
+    init(_ error: LLMError, provider: String) {
+        self = switch error {
+        case .missingAPIKey: .missingAPIKey
+        case .invalidAPIKey: .invalidAPIKey
+        case .insufficientCredit(let message): .insufficientCredit(message)
+        case .unknownModel(let message): .unknownModel(message)
+        case .imagesUnsupported: .imagesUnsupported(provider: provider)
+        case .rateLimited(let retryAfter): .rateLimited(retryAfter: retryAfter)
+        case .overloaded: .overloaded
+        case .requestTooLarge: .requestTooLarge
+        case .offline(let message): .offline(message)
+        case .refused(let explanation): .refused(explanation)
+        case .truncated: .truncated
+        case .malformedResponse(let message): .malformedResponse(message)
+        case .serverError(let status, let message): .serverError(status: status, message: message)
         }
     }
 }

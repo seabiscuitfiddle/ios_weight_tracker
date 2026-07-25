@@ -1,4 +1,5 @@
 import Foundation
+import LLMWire
 import Testing
 @testable import TallyCore
 
@@ -6,11 +7,16 @@ import Testing
 import FoundationNetworking
 #endif
 
+/// These cover what is Tally's own: the prompt it builds, the numbers it is willing to believe,
+/// and the sentences a user ends up reading. The wire formats themselves — headers, schema
+/// placement, status codes, both request shapes — are `LLMWire`'s to prove, and are covered in
+/// `Tests/LLMWireTests`.
+///
 /// A transport that returns a canned response and remembers what it was asked to send.
 ///
 /// This is what lets the entire LLM path be verified on a machine with no Xcode, no network and
-/// no API key: the recorded bodies below are real Messages API response shapes, and the captured
-/// request is asserted against the wire format we intend to send.
+/// no API key: the recorded bodies below are real API response shapes, and the captured request
+/// is asserted against the wire format we intend to send.
 final class StubTransport: HTTPTransport, @unchecked Sendable {
     private let responses: [Result<HTTPResponse, any Error>]
     private let lock = NSLock()
@@ -88,8 +94,8 @@ private func makeParser(
     _ transport: StubTransport,
     key: String? = "sk-ant-test",
     configuration: ParserConfiguration = .default
-) -> AnthropicNutritionParser {
-    AnthropicNutritionParser(
+) -> LLMNutritionParser {
+    LLMNutritionParser(
         transport: transport,
         keyStore: StaticAPIKeyStore(key),
         configuration: configuration
@@ -98,62 +104,22 @@ private func makeParser(
 
 @Suite("Parse request construction")
 struct ParseRequestTests {
-    @Test("sends the documented headers")
-    func headers() async throws {
-        let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
-        _ = try? await makeParser(transport).parse(.text("toast"))
-
-        let request = try #require(transport.lastRequest)
-        #expect(request.httpMethod == "POST")
-        #expect(request.value(forHTTPHeaderField: "x-api-key") == "sk-ant-test")
-        #expect(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
-        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
-        #expect(request.url?.absoluteString == "https://api.anthropic.com/v1/messages")
-    }
-
-    @Test("requests structured output with the schema and effort")
-    func structuredOutput() async throws {
+    /// The schema is Tally's, not the library's: these two constraints are what make structured
+    /// output reliable, and omitting either fails in ways this code has no way to detect.
+    @Test("asks for a schema the provider will enforce")
+    func schemaShape() async throws {
         let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
         _ = try? await makeParser(transport).parse(.text("toast"))
 
         let body = try #require(transport.lastBody)
         #expect(body["model"] as? String == "claude-opus-5")
 
-        let outputConfig = try #require(body["output_config"] as? [String: Any])
-        #expect(outputConfig["effort"] as? String == "low")
-
-        let format = try #require(outputConfig["format"] as? [String: Any])
-        #expect(format["type"] as? String == "json_schema")
-
+        let format = try #require(
+            (body["output_config"] as? [String: Any])?["format"] as? [String: Any]
+        )
         let schema = try #require(format["schema"] as? [String: Any])
-        // Structured outputs require these two, and omitting either makes the reply
-        // unreliable in ways this code has no way to detect.
         #expect(schema["additionalProperties"] as? Bool == false)
         #expect(schema["required"] as? [String] == ["items", "note"])
-    }
-
-    /// Thinking must be absent, not disabled. Disabling it on Opus 5 is a documented cause of
-    /// format irregularities — including tool calls arriving as plain prose — which would look
-    /// like a successful call that silently logged nothing.
-    @Test("does not disable thinking")
-    func doesNotDisableThinking() async throws {
-        let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
-        _ = try? await makeParser(transport).parse(.text("toast"))
-
-        let body = try #require(transport.lastBody)
-        #expect(body["thinking"] == nil)
-    }
-
-    @Test("marks the system prompt cacheable")
-    func systemPromptIsCacheable() async throws {
-        let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
-        _ = try? await makeParser(transport).parse(.text("toast"))
-
-        let body = try #require(transport.lastBody)
-        let system = try #require(body["system"] as? [[String: Any]])
-        #expect(system.count == 1)
-        #expect((system[0]["cache_control"] as? [String: Any])?["type"] as? String == "ephemeral")
-        #expect((system[0]["text"] as? String)?.isEmpty == false)
     }
 
     @Test("puts the user's words in the message content")
@@ -229,7 +195,7 @@ struct ParseRequestTests {
         #expect(text.lowercased().contains("body weight") == false)
     }
 
-    @Test("honours a configured model and effort")
+    @Test("honours a configured model, effort and endpoint")
     func honoursConfiguration() async throws {
         let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
         let configuration = ParserConfiguration(
@@ -259,23 +225,146 @@ struct ParseRequestTests {
         }
         #expect(transport.requests.isEmpty)
     }
+}
 
-    @Test("treats a blank key as missing", arguments: ["", "   ", "\n"])
-    func blankKeyIsMissing(_ key: String) async throws {
-        let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
+/// The same meal, described the same way, has to survive four providers with three different
+/// ideas of what "return JSON" means.
+@Suite("Provider portability")
+struct ProviderPortabilityTests {
+    private func chatCompletion(_ payload: String) -> String {
+        let quoted = String(
+            decoding: try! JSONSerialization.data(
+                withJSONObject: payload, options: .fragmentsAllowed
+            ),
+            as: UTF8.self
+        )
+        return """
+            {"id":"chatcmpl-1","object":"chat.completion","model":"gpt-5.2-mini",
+             "choices":[{"index":0,"message":{"role":"assistant","content":\(quoted)},
+             "finish_reason":"stop"}]}
+            """
+    }
 
-        await #expect(throws: NutritionParserError.missingAPIKey) {
-            try await makeParser(transport, key: key).parse(.text("toast"))
+    private static let oneMeal = """
+        {"items":[{"kind":"food","label":"Greek yogurt & berries","calories":280,
+        "proteinGrams":24,"fiberGrams":4,"exerciseKind":"none","durationMinutes":0,
+        "confidence":"high"}],"note":""}
+        """
+
+    @Test("reads the same result back from an OpenAI-format provider")
+    func openAIProvider() async throws {
+        let transport = StubTransport(json: chatCompletion(Self.oneMeal))
+        let parser = LLMNutritionParser(
+            transport: transport,
+            keyStore: StaticAPIKeyStore("sk-proj-test"),
+            configuration: ParserConfiguration(provider: .openAI, model: "gpt-5.2-mini")
+        )
+
+        let item = try #require(try await parser.parse(.text("greek yogurt")).items.first)
+        #expect(item.label == "Greek yogurt & berries")
+        #expect(item.calories == 280)
+        #expect(
+            transport.lastRequest?.url?.absoluteString
+                == "https://api.openai.com/v1/chat/completions"
+        )
+    }
+
+    /// DeepSeek and Qwen guarantee valid JSON but ignore the schema, so the reply arrives wrapped
+    /// in a code fence with a friendly sentence attached. That is a success, not a failure.
+    @Test("recovers a meal from a fenced, chatty reply")
+    func fencedReply() async throws {
+        let transport = StubTransport(json: chatCompletion("""
+            Here's the breakdown:
+            ```json
+            \(Self.oneMeal)
+            ```
+            Let me know if the portion looks off!
+            """))
+        let parser = LLMNutritionParser(
+            transport: transport,
+            keyStore: StaticAPIKeyStore("sk-test"),
+            configuration: ParserConfiguration(provider: .deepSeek, model: "deepseek-chat")
+        )
+
+        let item = try #require(try await parser.parse(.text("greek yogurt")).items.first)
+        #expect(item.calories == 280)
+    }
+
+    /// With nothing enforcing the schema, a number arriving as a string is routine. Losing a
+    /// correctly described meal to a quotation mark would be absurd.
+    @Test("accepts numbers the model quoted as strings")
+    func stringyNumbers() async throws {
+        let transport = StubTransport(json: chatCompletion("""
+            {"items":[{"kind":"food","label":"Rice","calories":"200","proteinGrams":"4.5",
+            "fiberGrams":1,"exerciseKind":"none","durationMinutes":"0","confidence":"high"}],
+            "note":""}
+            """))
+        let parser = LLMNutritionParser(
+            transport: transport,
+            keyStore: StaticAPIKeyStore("sk-test"),
+            configuration: ParserConfiguration(provider: .deepSeek, model: "deepseek-chat")
+        )
+
+        let item = try #require(try await parser.parse(.text("rice")).items.first)
+        #expect(item.calories == 200)
+        #expect(item.proteinGrams == 4.5)
+        #expect(item.durationMinutes == nil)
+    }
+
+    /// A missing optional field is a dropped number, not a dropped meal.
+    @Test("fills in fields a non-strict provider left out")
+    func missingFields() async throws {
+        let transport = StubTransport(json: chatCompletion(
+            #"{"items":[{"kind":"food","label":"Apple","calories":95}],"note":""}"#
+        ))
+        let parser = LLMNutritionParser(
+            transport: transport,
+            keyStore: StaticAPIKeyStore("sk-test"),
+            configuration: ParserConfiguration(provider: .deepSeek, model: "deepseek-chat")
+        )
+
+        let item = try #require(try await parser.parse(.text("an apple")).items.first)
+        #expect(item.calories == 95)
+        #expect(item.proteinGrams == 0)
+        #expect(item.confidence == .low)
+        #expect(item.exerciseKind == nil)
+    }
+
+    /// Naming the provider is the difference between a user switching model and a user assuming
+    /// the camera button is broken.
+    @Test("says which provider cannot read photos, before sending anything")
+    func imagesUnsupported() async throws {
+        let transport = StubTransport(json: chatCompletion(Self.oneMeal))
+        let parser = LLMNutritionParser(
+            transport: transport,
+            keyStore: StaticAPIKeyStore("sk-test"),
+            configuration: ParserConfiguration(provider: .deepSeek, model: "deepseek-chat")
+        )
+
+        await #expect(throws: NutritionParserError.imagesUnsupported(provider: "DeepSeek")) {
+            try await parser.parse(.image(data: Data([0x01]), mediaType: .jpeg, note: nil))
         }
         #expect(transport.requests.isEmpty)
     }
 
-    @Test("trims whitespace pasted around a key")
-    func trimsKey() async throws {
-        let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
-        _ = try? await makeParser(transport, key: "  sk-ant-test\n").parse(.text("toast"))
+    @Test("translates a provider's billing error into advice that helps")
+    func insufficientCredit() async throws {
+        let transport = StubTransport(
+            status: 402,
+            json: #"{"error":{"message":"Insufficient credits","type":"invalid_request_error"}}"#
+        )
+        let parser = LLMNutritionParser(
+            transport: transport,
+            keyStore: StaticAPIKeyStore("sk-or-test"),
+            configuration: ParserConfiguration(provider: .openRouter, model: "deepseek/deepseek-chat")
+        )
 
-        #expect(transport.lastRequest?.value(forHTTPHeaderField: "x-api-key") == "sk-ant-test")
+        let error = await #expect(throws: NutritionParserError.self) {
+            try await parser.parse(.text("toast"))
+        }
+        #expect(error?.userMessage.contains("Insufficient credits") == true)
+        #expect(error?.userMessage.contains("Settings") == true)
+        #expect(error?.isRetryable == false)
     }
 }
 
@@ -599,6 +688,11 @@ struct ParserErrorPresentationTests {
     @Test("every error has a usable message", arguments: [
         NutritionParserError.missingAPIKey,
         .invalidAPIKey,
+        .insufficientCredit(nil),
+        .insufficientCredit("Out of credit"),
+        .unknownModel(nil),
+        .unknownModel("The model 'gpt-9' does not exist"),
+        .imagesUnsupported(provider: "DeepSeek"),
         .rateLimited(retryAfter: 30),
         .rateLimited(retryAfter: nil),
         .overloaded,

@@ -52,6 +52,11 @@ public protocol SettingsStore: Sendable {
     func save(_ profile: UserProfile) throws
     func goalSettings() throws -> GoalSettings
     func save(_ goal: GoalSettings) throws
+    /// Which AI provider and model to use. Kept here rather than in the app so an App Intent —
+    /// which runs with no app process behind it — resolves the same choice the user made in
+    /// Settings.
+    func aiSettings() throws -> AISettings
+    func save(_ ai: AISettings) throws
 }
 
 /// The three stores plus a change signal, passed around as one value so call sites take a

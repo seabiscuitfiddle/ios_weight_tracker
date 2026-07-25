@@ -11,8 +11,10 @@ screen, the home-screen widget, and the app all lead with the same three metrics
 calories, protein, fiber — so the number you glance at is the number you edit.
 
 Data is stored **only on your device**. There is no account, no server, and no sync. The one
-outbound network call is to the LLM that turns "two eggs and sourdough toast" into numbers,
-using an API key you supply.
+outbound network call is to the LLM that turns "two eggs and sourdough toast" into numbers —
+**your choice of provider**, with a key you supply. Claude, ChatGPT, anything on OpenRouter,
+DeepSeek, Kimi, GLM and Qwen directly, your own endpoint, or Apple's on-device model, which
+makes even that one call unnecessary.
 
 > **Status: in development.** The Swift package (models, storage, goal engine, LLM parsing) is
 > being built first; the SwiftUI app and widget targets follow. See "Project status" below.
@@ -23,7 +25,7 @@ using an API key you supply.
 
 - [Running it on a Mac](#running-it-on-a-mac) — **start here**
 - [What you must fill in](#what-you-must-fill-in)
-- [Getting an API key](#getting-an-api-key)
+- [Choosing an AI provider](#choosing-an-ai-provider)
 - [Building](#building)
 - [Architecture](#architecture)
 - [Keeping this repository publishable](#keeping-this-repository-publishable)
@@ -94,7 +96,7 @@ runs *on*, not what it is built *with*.
 | Adding entries by hand, weight logging, goal calculation | ✅ | |
 | Data persisting across launches | ✅ | |
 | Correct typography | | Archivo font files — see [Fonts](#2-fonts) |
-| AI logging by text | | Your Anthropic API key, pasted into Settings |
+| AI logging by text | On iOS 26+ with Apple Intelligence | Otherwise an API key for any supported provider, pasted into Settings |
 | Widgets showing data | | App Group registered for your team |
 | HealthKit import | | A real device (Health has no simulator data) |
 | Voice input | | A real device (no simulator microphone) |
@@ -240,25 +242,49 @@ another app you have installed; if you do, update `DeepLink.scheme` in
 
 ---
 
-## Getting an API key
+## Choosing an AI provider
 
-Text, photo, and voice logging call the Anthropic API with **your own key** — you are billed
-directly, and there is no intermediary server.
+Text, photo, and voice logging call a language model with **your own key** — you are billed by
+that provider directly, and there is no intermediary server. Open **Settings → AI logging** to
+pick one.
 
-1. Create a key at [console.anthropic.com](https://console.anthropic.com/settings/keys).
-2. In Tally, open **Settings → AI logging** and paste it.
+| | Where to get a key | Notes |
+|---|---|---|
+| **Apple on-device** | none needed | iOS 26+ with Apple Intelligence. Free, offline, nothing leaves the phone. Rougher portion estimates, and no photos. |
+| **Anthropic** | [console.anthropic.com](https://console.anthropic.com/settings/keys) | The default. Strict schema support. |
+| **OpenAI** | [platform.openai.com](https://platform.openai.com/api-keys) | Strict schema support. |
+| **OpenRouter** | [openrouter.ai/keys](https://openrouter.ai/keys) | One key, several hundred models including every Chinese lab. The easy way to try them. |
+| **DeepSeek, Moonshot (Kimi), Zhipu (GLM), Alibaba (Qwen)** | each provider's console | Cheaper than routing through OpenRouter. Most support JSON mode but not strict schemas — see below. |
+| **Custom** | your own | Any OpenAI-compatible endpoint: a gateway, a self-hosted model, or Ollama / LM Studio on your network, where no key is needed at all. |
 
-The key is stored in the **iOS Keychain**, never in `UserDefaults`, never in the App Group's
-shared storage, and never written to logs. It is read only when a request is built, and sent
-only to `api.anthropic.com`.
+The model is a **free-text field**, not a fixed list, because identifiers change faster than any
+shipped app can keep up with. "Fetch models" asks the provider what your key can actually reach.
 
-**Tally is fully usable without a key.** Every screen works and entries can be added by hand
-with calories and macros typed in; the AI quick-log simply prompts you to add a key instead of
-failing quietly. Because the key lives on the device, treat it as you would any credential in a
-personal app — anyone with your unlocked phone can use it.
+Keys are stored in the **iOS Keychain**, never in `UserDefaults`, never in the App Group's shared
+storage, and never written to logs. There is **one item per provider**, so switching between them
+doesn't mean pasting a key in again and no provider can be sent a key minted for another. A key is
+read only when a request is built, and sent only to that provider's own host — which the settings
+footer names explicitly.
 
-Model choice is in Settings. The default is `claude-opus-5` at low effort, which keeps
-quick-log latency down; `claude-haiku-4-5` is offered for lower cost per log.
+**Tally is fully usable without any of this.** Every screen works and entries can be added by hand
+with calories and macros typed in; the AI quick-log prompts you to add a key instead of failing
+quietly. Because keys live on the device, treat them as you would any credential in a personal
+app — anyone with your unlocked phone can use them.
+
+### Why structured output is the interesting part
+
+Tally asks for a JSON document matching a schema. Only some providers can enforce that:
+
+- **Strict `json_schema`** — OpenAI, Anthropic, OpenRouter (model permitting). The reply is
+  guaranteed to match.
+- **JSON mode only** — DeepSeek, Qwen and most compatible-mode endpoints. Valid JSON, schema
+  ignored, so the schema is sent in the prompt instead.
+- **Neither** — self-hosted and older endpoints. Schema in the prompt, and the reply is scraped
+  for the first JSON document in it.
+
+Each provider declares which it supports and `LLMWire` adapts, so the app passes a schema once and
+never branches on vendor. The decoder is deliberately forgiving under the weaker two: `"280"`
+where `280` was asked for costs one field, not the whole meal.
 
 ---
 
@@ -344,14 +370,17 @@ greyscale because iOS keys the user's tint to its luminance rather than to its c
 ## Architecture
 
 ```
-Sources/TallyCore/     no dependencies — builds and tests anywhere
-  Model/               Day, Entry, DayTotals, WeightSample, UserProfile, GoalSettings
+Sources/LLMWire/       provider-agnostic LLM calling — MIT licensed, no dependencies,
+                       knows nothing about Tally. Two wire formats (Anthropic Messages,
+                       OpenAI Chat Completions), provider definitions, error taxonomy.
+Sources/TallyCore/     depends only on LLMWire — builds and tests anywhere
+  Model/               Day, Entry, DayTotals, WeightSample, UserProfile, GoalSettings, AISettings
   Store/               EntryStore / WeightStore / SettingsStore protocols + in-memory ones
   Goal/                BMR, weight trend, adaptive TDEE, daily goal
-  LLM/                 NutritionParser protocol and the Anthropic implementation
+  LLM/                 the nutrition prompt, schema, and result validation
   Routing/             deep-link parsing
 Sources/TallyStore/    the SQLite conformances — the only target that links GRDB
-App/                   SwiftUI app (Xcode only)
+App/                   SwiftUI app (Xcode only), including the on-device parser
 Widget/                WidgetKit extension (Xcode only)
 ```
 
@@ -364,6 +393,13 @@ composition root.
 
 The in-memory stores in `TallyCore` are not only test doubles; they define the reference
 semantics, and the same suite runs against both implementations to keep them in agreement.
+
+**The AI provider is data, not a type.** Adding one is a value in `LLMWire.builtIn` — an
+endpoint, a wire format, and a declaration of what it can do about JSON schemas and images — not
+a new parser and never a branch in a screen. `LLMWire` abstracts the *transport* rather than the
+generation call, which is what keeps the whole path testable: every request goes through an
+`HTTPTransport`, so both wire formats are verified against recorded responses on a machine with
+no Xcode, no network and no key.
 
 **The daily goal is derived, not guessed.** It starts from a Mifflin-St Jeor estimate of your
 expenditure and, once about two weeks of data exist, blends toward what your logged intake and
@@ -382,7 +418,7 @@ Everything account-specific is kept out of tracked files by construction rather 
 |---|---|---|
 | `.env`, gitignored | `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | An Apple Team ID identifies its owner. Template: `.env.example`. |
 | GitHub repository secrets | The same two, optional | Only needed if you add a job that signs for a device. |
-| The device keychain | Your Anthropic API key | Entered in Settings at runtime. There is no build-time key, so no binary can leak one. |
+| The device keychain | Your API keys, one item per provider | Entered in Settings at runtime. There is no build-time key, so no binary can leak one. |
 
 Three things enforce it, in increasing order of how late they catch you:
 
@@ -493,9 +529,13 @@ The full text is in [`LICENSE`](LICENSE). Per-file copyright headers have delibe
 added; the license file covers the work, and headers on every source file would bury the
 explanatory comments that are the point of this codebase.
 
-Two things carry their own terms and are **not** covered by it:
+Three things carry their own terms and are **not** covered by it:
 
 - **Archivo**, the typeface the design uses, is under the SIL Open Font License and is not
   redistributed here — you download it yourself (see [Fonts](#2-fonts)).
+- **`Sources/LLMWire/`** is **MIT** licensed, not GPL — see [`Sources/LLMWire/LICENSE`](Sources/LLMWire/LICENSE).
+  It is a self-contained, dependency-free library that knows nothing about Tally, kept in a form
+  that can be lifted into its own repository with a `git mv`. The rest of this repository remains
+  GPL-3.0.
 - **GRDB.swift**, the only third-party dependency, is MIT-licensed. Its terms are in
   `.build/checkouts/GRDB.swift/LICENSE` after a build, and in its repository.

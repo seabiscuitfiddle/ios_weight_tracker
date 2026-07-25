@@ -5,12 +5,12 @@ import Foundation
 /// Both are static so they form a stable prefix the API can cache across requests, and so the
 /// exact instructions the model receives are reviewable in one place rather than assembled
 /// across the call site.
-enum ParsePrompt {
+public enum ParsePrompt {
     /// Sentinel used for "not an exercise", because structured outputs are far more reliable
     /// with a required enum than with an omittable field.
-    static let noExerciseKind = "none"
+    public static let noExerciseKind = "none"
 
-    static let system = """
+    public static let system = """
         You convert short descriptions of food and exercise into structured data for a calorie \
         tracker. The user is logging what they ate or did, in their own words.
 
@@ -53,8 +53,9 @@ enum ParsePrompt {
     ///    field is present on every item. That's why "not applicable" is expressed as the
     ///    `none` sentinel and as 0 rather than by omitting fields.
     ///  - Numeric bounds (`minimum`/`maximum`) are not supported, so ranges are enforced in
-    ///    Swift when decoding instead — see `AnthropicNutritionParser.item(from:)`.
-    static let outputSchema = """
+    ///    Swift when decoding instead — see `LLMNutritionParser.item(from:)`, which also has to
+    ///    cope with the providers that treat this schema as a suggestion rather than a contract.
+    public static let outputSchema = """
         {
           "type": "object",
           "properties": {
@@ -101,7 +102,7 @@ enum ParsePrompt {
         """
 
     /// The instruction accompanying the input itself.
-    static func userInstruction(for input: ParseInput, context: ParseContext) -> String {
+    public static func userInstruction(for input: ParseInput, context: ParseContext) -> String {
         var lines: [String] = []
 
         if let weight = context.bodyWeightPounds, weight > 0 {

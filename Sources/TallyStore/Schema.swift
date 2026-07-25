@@ -82,6 +82,17 @@ enum Schema {
                 """)
         }
 
+        // Provider choice moved into storage when the AI became configurable. It has to be
+        // readable without an app process behind it, because Siri reaches the parser through an
+        // App Intent — and a choice held only in memory would mean a spoken entry silently used
+        // a different provider, and a different account's credit, than a typed one.
+        //
+        // Nullable with no default, so an existing row means "never configured" and reads back as
+        // `AISettings.default` rather than as a choice the user did not make.
+        migrator.registerMigration("v2.aiSettings") { db in
+            try db.execute(sql: "ALTER TABLE settings ADD COLUMN aiJSON TEXT")
+        }
+
         return migrator
     }
 }

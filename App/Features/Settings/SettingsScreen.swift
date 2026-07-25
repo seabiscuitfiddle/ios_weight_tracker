@@ -1,7 +1,8 @@
+import LLMWire
 import SwiftUI
 import TallyCore
 
-/// Profile, goal, units, and the API key.
+/// Profile, goal, units, and the AI provider.
 ///
 /// The design doesn't draw this screen, but it needs to exist: the goal engine needs a height and
 /// age, and AI logging needs a key. Uses a plain `Form` rather than the design's custom
@@ -13,8 +14,19 @@ struct SettingsScreen: View {
 
     @State private var profile = UserProfile.default
     @State private var goal = GoalSettings.default
+    @State private var ai = AISettings.default
+    /// The key for whichever provider is selected. Which one that is has to be tracked
+    /// separately, so switching provider mid-edit writes the typed key to the right item.
     @State private var apiKey = ""
-    @State private var model = ParserConfiguration.default.model
+    @State private var keyProviderID = AISettings.default.providerID
+    @State private var customName = "Custom"
+    @State private var customBaseURL = ""
+    @State private var customJSONStyle = StructuredOutputStyle.prompt
+    /// Filled by asking the provider what the key can reach. Empty until then, because a shipped
+    /// list of model identifiers is wrong within months.
+    @State private var fetchedModels: [String] = []
+    @State private var isRefreshingModels = false
+    @State private var modelRefreshMessage: String?
     @State private var heightText = ""
     @State private var targetWeightText = ""
     @State private var saveError: String?
@@ -63,29 +75,141 @@ struct SettingsScreen: View {
 
     // MARK: Sections
 
+    /// Provider, model, and the key for whichever provider is chosen.
+    ///
+    /// One section rather than a sub-screen, because the three settings are meaningless apart:
+    /// a model identifier only means something at a provider, and a key only works at the one it
+    /// was minted for.
     @ViewBuilder private var aiSection: some View {
-        Section {
-            SecureField("sk-ant-…", text: $apiKey)
-                .textContentType(.password)
+        onDeviceSection
+
+        if !usesOnDevice {
+            Section {
+                Picker("Provider", selection: providerSelection) {
+                    ForEach(LLMProvider.builtIn) { provider in
+                        Text(provider.displayName).tag(provider.id)
+                    }
+                    Text("Custom (OpenAI-compatible)").tag(Self.customProviderID)
+                }
+
+                if isCustomProvider {
+                    customProviderRows
+                }
+
+                modelRow
+
+                SecureField(ai.provider.keyPlaceholder, text: $apiKey)
+                    .textContentType(.password)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+
+                if let consoleURL = ai.provider.consoleURL {
+                    Link("Get a key from \(ai.provider.displayName)", destination: consoleURL)
+                        .font(.footnote)
+                }
+            } header: {
+                Text("AI logging")
+            } footer: {
+                // States plainly where the key goes and where it's sent. A credential the user
+                // supplies deserves an explicit answer to "what happens to this?", in the place
+                // they hand it over — and now that the destination is their choice, it has to be
+                // read from that choice rather than written into the sentence.
+                Text("""
+                    Stored in your device's keychain and sent only to \(ai.provider.host). \
+                    You're billed by \(ai.provider.displayName) directly. Each provider keeps \
+                    its own key, so switching back doesn't mean entering it again. Tally works \
+                    without a key — you can always add entries by hand.
+                    """)
+            }
+        }
+    }
+
+    /// Offered only when it would actually work. A toggle that can be switched on and then fails
+    /// every request is worse than one that isn't there.
+    @ViewBuilder private var onDeviceSection: some View {
+        if OnDeviceModel.isAvailable {
+            Section {
+                Toggle("Use the on-device model", isOn: $ai.prefersOnDevice)
+            } header: {
+                Text("On device")
+            } footer: {
+                Text("""
+                    Free, private, and works offline — nothing leaves your phone and there's no \
+                    key to enter. It's a much smaller model than the hosted ones, so portion \
+                    estimates are rougher, and it can't read photos of meals.
+                    """)
+            }
+        }
+    }
+
+    /// A text field rather than a picker, with suggestions alongside.
+    ///
+    /// Providers add and retire model identifiers constantly, so any fixed list is wrong within
+    /// months and a picker would make the right answer unreachable. The suggestions are a
+    /// convenience; asking the provider what the key can actually reach is the reliable route.
+    @ViewBuilder private var modelRow: some View {
+        HStack {
+            Text("Model")
+            Spacer()
+            TextField(ai.provider.defaultModel, text: $ai.model)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+        }
 
-            Picker("Model", selection: $model) {
-                ForEach(ParserConfiguration.availableModels, id: \.self) { name in
-                    Text(name).tag(name)
-                }
+        Menu {
+            ForEach(modelSuggestions, id: \.self) { name in
+                Button(name) { ai.model = name }
             }
-        } header: {
-            Text("AI logging")
-        } footer: {
-            // States plainly where the key goes and where it's sent. A credential the user
-            // supplies deserves an explicit answer to "what happens to this?", in the place
-            // they hand it over.
-            Text("""
-                Stored in your device's keychain and sent only to api.anthropic.com. \
-                You're billed by Anthropic directly. Tally works without a key — you can \
-                always add entries by hand.
-                """)
+        } label: {
+            HStack {
+                Text(fetchedModels.isEmpty ? "Suggested models" : "Models on your account")
+                Spacer()
+                if isRefreshingModels { ProgressView() }
+            }
+        }
+        .disabled(modelSuggestions.isEmpty)
+
+        Button("Fetch models from \(ai.provider.displayName)") {
+            Task { await refreshModels() }
+        }
+        .disabled(isRefreshingModels || ai.provider.modelsEndpoint == nil)
+
+        if let modelRefreshMessage {
+            Text(modelRefreshMessage)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Enough to reach a self-hosted endpoint, a gateway, or Ollama on the local network.
+    @ViewBuilder private var customProviderRows: some View {
+        HStack {
+            Text("Name")
+            Spacer()
+            TextField("Custom", text: $customName)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+        }
+
+        HStack {
+            Text("Base URL")
+            Spacer()
+            TextField("http://localhost:11434/v1", text: $customBaseURL)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+        }
+
+        // The pessimistic default works everywhere; guessing strict support fails with an opaque
+        // 400 on endpoints that never implemented it.
+        Picker("JSON support", selection: $customJSONStyle) {
+            Text("None").tag(StructuredOutputStyle.prompt)
+            Text("JSON mode").tag(StructuredOutputStyle.jsonObject)
+            Text("Strict schema").tag(StructuredOutputStyle.jsonSchema)
         }
     }
 
@@ -299,6 +423,95 @@ struct SettingsScreen: View {
         }
     }
 
+    // MARK: AI provider
+
+    /// The id used for a user-supplied endpoint. Fixed rather than generated so the key stored
+    /// against it survives an edit to the URL.
+    private static let customProviderID = "custom"
+
+    private var isCustomProvider: Bool { ai.providerID == Self.customProviderID }
+
+    /// True when the on-device model is both preferred and actually usable — the only case where
+    /// the provider rows are pointless. A preference set on another device stays visible.
+    private var usesOnDevice: Bool { ai.prefersOnDevice && OnDeviceModel.isAvailable }
+
+    private var modelSuggestions: [String] {
+        fetchedModels.isEmpty ? ai.provider.suggestedModels : fetchedModels
+    }
+
+    /// Switching provider rewrites the model and moves the key field, because carrying either
+    /// across is worse than useless: `claude-opus-5` at OpenAI is a 404, and one company's key is
+    /// never valid at another.
+    private var providerSelection: Binding<String> {
+        Binding(
+            get: { ai.providerID },
+            set: { id in
+                guard id != ai.providerID else { return }
+                persistKey()
+
+                if id == Self.customProviderID {
+                    ai.select(customProvider())
+                } else if let provider = LLMProvider.builtIn(id: id) {
+                    ai.select(provider)
+                }
+
+                fetchedModels = []
+                modelRefreshMessage = nil
+                loadKey(for: ai.providerID)
+            }
+        )
+    }
+
+    /// Assembles the user's endpoint into a provider. Tolerates a half-typed URL by falling back
+    /// to a placeholder, so the picker can be switched to Custom before the address is known.
+    private func customProvider() -> LLMProvider {
+        let url = URL(string: customBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+            ?? URL(string: "http://localhost:11434/v1")!
+
+        return .custom(
+            id: Self.customProviderID,
+            displayName: customName.isEmpty ? "Custom" : customName,
+            baseURL: url,
+            structuredOutput: customJSONStyle,
+            defaultModel: ai.model
+        )
+    }
+
+    /// Replaces the suggestions with what this key can actually reach.
+    private func refreshModels() async {
+        isRefreshingModels = true
+        modelRefreshMessage = nil
+        defer { isRefreshingModels = false }
+
+        do {
+            let models = try await ModelCatalog(transport: URLSessionTransport.makeDefault())
+                .models(for: ai.provider, apiKey: apiKey)
+            fetchedModels = models
+            modelRefreshMessage = models.isEmpty
+                ? "That key reached \(ai.provider.displayName) but returned no models."
+                : "\(models.count) models available."
+        } catch let error as LLMError {
+            // The provider's own words beat anything invented here — "invalid api key" and
+            // "insufficient credit" send the user to completely different places.
+            modelRefreshMessage = error.providerMessage
+                ?? "Couldn't reach \(ai.provider.displayName). Check the key and try again."
+        } catch {
+            modelRefreshMessage = error.localizedDescription
+        }
+    }
+
+    private func loadKey(for providerID: String) {
+        keyProviderID = providerID
+        apiKey = (try? environment.keyStore(for: providerID).apiKey()) ?? ""
+    }
+
+    /// Writes the typed key to the item for the provider it was typed against, not the one now
+    /// selected — the distinction that stops a switch mid-edit from filing a key under the wrong
+    /// company.
+    private func persistKey() {
+        try? environment.keyStore(for: keyProviderID).save(apiKey)
+    }
+
     // MARK: Loading and saving
 
     private static let defaultBirthDate = Calendar.current.date(
@@ -313,10 +526,20 @@ struct SettingsScreen: View {
             saveError = String(describing: error)
         }
 
+        ai = environment.aiSettings
+        if let custom = ai.customProvider {
+            customName = custom.displayName
+            // Shown as the base rather than the completed endpoint, which is the form the user
+            // typed and the form their provider's documentation uses.
+            customBaseURL = custom.endpoint.deletingLastPathComponent()
+                .deletingLastPathComponent().absoluteString
+            customJSONStyle = custom.structuredOutput
+        }
+
         heightText = Self.heightText(from: profile.heightCentimeters)
         targetWeightText = goal.targetPounds
             .map { String(format: "%.1f", profile.massUnit.value(fromPounds: $0)) } ?? ""
-        apiKey = (try? environment.keyStore.apiKey()) ?? ""
+        loadKey(for: ai.providerID)
     }
 
     private func save() {
@@ -329,11 +552,17 @@ struct SettingsScreen: View {
         goal.targetPounds = Self.number(from: targetWeightText)
             .map { profile.massUnit.pounds(from: $0) }
 
+        // Rebuilt from the fields on the way out, so an edited URL or JSON setting takes effect
+        // rather than being stranded on the value captured when Custom was first chosen.
+        if isCustomProvider {
+            ai.customProvider = customProvider()
+        }
+
         do {
             try environment.stores.settings.save(profile)
             try environment.stores.settings.save(goal)
-            try environment.keyStore.save(apiKey)
-            environment.updateParserConfiguration(model: model)
+            persistKey()
+            try environment.updateAISettings(ai)
         } catch {
             saveError = String(describing: error)
         }

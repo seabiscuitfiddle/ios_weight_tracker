@@ -7,10 +7,14 @@ import FoundationNetworking
 
 /// One HTTP round trip.
 ///
-/// The seam that makes the whole LLM layer testable without a network or an API key: tests
-/// supply a transport that replays recorded responses and captures the request that was built,
-/// so both halves of the contract — what we send, and how we read what comes back — are
-/// verified on a machine with no Xcode and no credentials.
+/// The seam that makes the whole library testable without a network or an API key: tests supply a
+/// transport that replays recorded responses and captures the request that was built, so both
+/// halves of the contract — what we send, and how we read what comes back — are verified on a
+/// machine with no Xcode and no credentials.
+///
+/// It is also the reason this library abstracts *transport* rather than *generation*. Wrapping
+/// the generation call, as most multi-provider SDKs do, hides exactly the thing that has to be
+/// asserted on when a new provider is added: the bytes on the wire.
 public protocol HTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> HTTPResponse
 }
@@ -45,14 +49,17 @@ public struct URLSessionTransport: HTTPTransport {
 
     /// A session with timeouts suited to a foreground request the user is waiting on.
     ///
-    /// The default 60s would leave someone staring at a spinner far longer than they'd tolerate
-    /// while logging a meal; 30s is past the point where retrying beats waiting. Connectivity
-    /// waiting is left off (the default) on purpose — offline should surface immediately so the
-    /// app can offer manual entry, not queue silently behind a spinner.
-    public static func makeDefault() -> URLSessionTransport {
+    /// The default 60s would leave someone staring at a spinner far longer than they'd tolerate;
+    /// 30s is past the point where retrying beats waiting. Connectivity waiting is left off (the
+    /// default) on purpose — offline should surface immediately so the caller can offer a manual
+    /// path, not queue silently behind a spinner.
+    public static func makeDefault(
+        timeout: TimeInterval = 30,
+        resourceTimeout: TimeInterval = 60
+    ) -> URLSessionTransport {
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 60
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = resourceTimeout
         return URLSessionTransport(session: URLSession(configuration: configuration))
     }
 
@@ -60,7 +67,7 @@ public struct URLSessionTransport: HTTPTransport {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                throw NutritionParserError.malformedResponse("Response was not HTTP.")
+                throw LLMError.malformedResponse("Response was not HTTP.")
             }
 
             var headers: [String: String] = [:]
@@ -70,18 +77,14 @@ public struct URLSessionTransport: HTTPTransport {
                 }
             }
             return HTTPResponse(statusCode: http.statusCode, body: data, headers: headers)
-        } catch let error as NutritionParserError {
+        } catch let error as LLMError {
             throw error
         } catch let error as URLError {
-            // Connectivity problems are worth distinguishing: the app can suggest logging by
-            // hand rather than implying the service is broken.
-            switch error.code {
-            case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
-                 .cannotConnectToHost, .dnsLookupFailed, .timedOut:
-                throw NutritionParserError.offline(error.localizedDescription)
-            default:
-                throw NutritionParserError.offline(error.localizedDescription)
-            }
+            // Connectivity problems are worth distinguishing: the caller can suggest an offline
+            // path rather than implying the service is broken. Note that a self-hosted or LAN
+            // endpoint — Ollama on a desk machine — fails here far more often than a hosted API,
+            // which is another reason not to report it as a server fault.
+            throw LLMError.offline(error.localizedDescription)
         }
     }
 }

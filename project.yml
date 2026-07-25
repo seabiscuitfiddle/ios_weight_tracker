@@ -74,6 +74,10 @@ targets:
         product: TallyCore
       - package: Tally
         product: TallyStore
+      # The provider-agnostic LLM layer. Linked directly because the app names providers and
+      # endpoints in Settings, not only through TallyCore's parser.
+      - package: Tally
+        product: LLMWire
       - target: TallyWidget
         embed: true
     settings:
