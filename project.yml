@@ -49,6 +49,9 @@ targets:
     platform: iOS
     sources:
       - path: App
+        # Keeps the fonts-directory placeholder note out of the app bundle.
+        excludes:
+          - "**/*.md"
     dependencies:
       - package: Tally
         product: TallyCore
@@ -93,12 +96,15 @@ targets:
         NSHealthShareUsageDescription: >-
           Read your weight and workouts from Health so Tally can fill them in for you.
 
-        # Archivo, added by you — see README. The app falls back to the system font when
-        # these files are absent, so a missing font looks wrong rather than crashing.
+        # Archivo, added by you — see README. Both the static faces and the variable font are
+        # listed because Google Fonts now ships the variable one by default; entries for files
+        # you don't have are ignored. The app falls back to the system font when none are
+        # present, so a missing font looks wrong rather than crashing.
         UIAppFonts:
           - Archivo-Regular.ttf
           - Archivo-SemiBold.ttf
           - Archivo-ExtraBold.ttf
+          - Archivo[wdth,wght].ttf
 
   # ────────────────────────────────────────────────────────────────────────────────────
   TallyWidget:

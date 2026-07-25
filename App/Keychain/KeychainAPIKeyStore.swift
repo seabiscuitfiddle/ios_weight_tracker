@@ -18,9 +18,19 @@ public struct KeychainAPIKeyStore: APIKeyStore {
     private let service: String
     private let account: String
 
-    public init(service: String = "com.example.tally.anthropic", account: String = "api-key") {
+    public init(service: String, account: String = "api-key") {
         self.service = service
         self.account = account
+    }
+
+    /// Keyed off the running bundle, so changing `BUNDLE_ID_PREFIX` doesn't silently orphan a
+    /// previously stored key under a service name nothing looks up any more.
+    public static func forCurrentBundle(
+        bundle: Bundle = .main,
+        suffix: String = "anthropic"
+    ) -> KeychainAPIKeyStore {
+        let base = bundle.bundleIdentifier ?? "tally"
+        return KeychainAPIKeyStore(service: "\(base).\(suffix)")
     }
 
     public func apiKey() throws -> String? {

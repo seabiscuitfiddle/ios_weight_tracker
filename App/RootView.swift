@@ -8,7 +8,9 @@ struct RootView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let startupError = environment.startupError {
-                StartupErrorBanner(detail: startupError)
+                StorageBanner(detail: startupError, severity: .notSaving)
+            } else if let notice = environment.storageNotice {
+                StorageBanner(detail: notice, severity: .widgetOnly)
             }
 
             // Content and tab bar are stacked by hand rather than using `TabView`, because the
@@ -111,26 +113,59 @@ struct TallyTabBar: View {
     }
 }
 
-/// Shown when the database could not be opened.
+/// Explains a storage problem, at the severity it actually warrants.
 ///
-/// Deliberately loud and specific. The near-certain cause is an App Group that doesn't match the
-/// developer portal, and the failure is otherwise invisible — the app would look like it works
-/// while saving nothing.
-struct StartupErrorBanner: View {
+/// Two levels, because conflating them would be its own bug. "Nothing is being saved" is an
+/// emergency and has to be loud. "Saved, but the widget can't see it" is a setup detail that
+/// shouldn't look like data loss — but must still be said, or it resurfaces later as a widget
+/// that mysteriously stays blank.
+struct StorageBanner: View {
+    enum Severity {
+        /// No database at all; entries will be lost.
+        case notSaving
+        /// Persisting locally, but outside the shared container the widget reads.
+        case widgetOnly
+
+        var title: String {
+            switch self {
+            case .notSaving: "Entries are not being saved"
+            case .widgetOnly: "The widget won't show your data"
+            }
+        }
+
+        var background: Color {
+            switch self {
+            case .notSaving: .tallyAccent
+            case .widgetOnly: .tallySurface
+            }
+        }
+
+        var foreground: Color {
+            switch self {
+            case .notSaving: .tallyInverted
+            case .widgetOnly: .tallyText
+            }
+        }
+    }
+
     let detail: String
+    let severity: Severity
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.space1) {
-            Text("Entries are not being saved")
+            Text(severity.title)
                 .font(.tallyScaled(13, weight: .heavy))
             Text(detail)
                 .font(.tallyScaled(11, weight: .regular, relativeTo: .caption))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(Color.tallyInverted)
+        .foregroundStyle(severity.foreground)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Metrics.space3)
-        .background(Color.tallyAccent)
+        .background(severity.background)
+        .overlay(alignment: .bottom) {
+            if severity == .widgetOnly { TallyRule() }
+        }
         .accessibilityElement(children: .combine)
     }
 }

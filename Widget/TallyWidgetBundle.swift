@@ -64,7 +64,7 @@ struct TallyTimelineProvider: TimelineProvider {
     private func load() -> TallySnapshot {
         // Any failure here shows the empty state rather than stale or invented numbers: a widget
         // that quietly displays yesterday's total is worse than one that shows a dash.
-        guard let url = TallyDatabase.url(forAppGroup: TallyDatabase.defaultAppGroupID),
+        guard let url = TallyDatabase.url(forAppGroup: TallyDatabase.appGroupIdentifier()),
               let reader = try? TallyDatabase.openReadOnly(at: url)
         else {
             return TallySnapshot(

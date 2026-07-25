@@ -16,10 +16,14 @@ final class AppEnvironment {
     let stores: StoreBundle
     let keyStore: KeychainAPIKeyStore
 
-    /// Set when the database could not be opened. Surfaced to the user rather than crashed on:
-    /// the overwhelmingly likely cause is a misconfigured App Group, and a crash on launch tells
-    /// them nothing about how to fix it.
+    /// Set when no database could be opened at all, so nothing is being persisted. Surfaced
+    /// rather than crashed on: a crash at launch tells the user nothing about how to fix it.
     private(set) var startupError: String?
+
+    /// Set when data *is* being saved, but to the app's own container rather than the shared one —
+    /// so the widget won't show anything. Less severe than `startupError`, and worth saying
+    /// out loud rather than leaving as a mysteriously blank widget.
+    private(set) var storageNotice: String?
 
     /// Rebuilt whenever settings change, because the model and key can both be edited.
     private(set) var parser: any NutritionParser
@@ -37,7 +41,7 @@ final class AppEnvironment {
     }
 
     init() {
-        let keyStore = KeychainAPIKeyStore()
+        let keyStore = KeychainAPIKeyStore.forCurrentBundle()
         self.keyStore = keyStore
 
         if Self.isUITesting {
@@ -46,15 +50,23 @@ final class AppEnvironment {
             return
         }
 
-        // A failure here is a setup problem, not a reason to lose the app. Falling back to an
-        // in-memory database keeps every screen navigable so the error message can be read —
-        // but it is emphatically not a silent fallback: `startupError` is set, and the UI must
-        // say the data is not being saved.
+        // Prefers the shared App Group container and falls back to the app's own, so a fresh
+        // clone runs on a simulator without first registering an App Group. The fallback still
+        // persists to a file; only the widget loses out, and `storageNotice` says so.
         do {
-            self.stores = try TallyServices.stores()
+            let opened = try TallyDatabase.open()
+            self.stores = opened.stores
+            if case .appPrivate(let reason) = opened.location {
+                self.storageNotice = reason
+            }
         } catch {
+            // Couldn't open any database at all. Keep the app navigable so the message can be
+            // read, but be explicit that nothing is being kept.
             self.stores = StoreBundle.inMemory()
-            self.startupError = String(describing: error)
+            self.startupError = """
+                Tally couldn't open its database, so nothing you log will be saved. \
+                \(error)
+                """
         }
 
         self.parser = TallyServices.parser()
@@ -63,7 +75,7 @@ final class AppEnvironment {
     /// For previews and UI tests: entirely in memory, with a stub parser.
     init(previewStores: StoreBundle, parser: any NutritionParser = StubNutritionParser()) {
         self.stores = previewStores
-        self.keyStore = KeychainAPIKeyStore(service: "com.example.tally.preview")
+        self.keyStore = KeychainAPIKeyStore(service: "tally.preview")
         self.parser = parser
     }
 

@@ -21,7 +21,8 @@ using an API key you supply.
 
 ## Table of contents
 
-- [What you must fill in](#what-you-must-fill-in) — **read this before building**
+- [Running it on a Mac](#running-it-on-a-mac) — **start here**
+- [What you must fill in](#what-you-must-fill-in)
 - [Getting an API key](#getting-an-api-key)
 - [Building](#building)
 - [Architecture](#architecture)
@@ -30,39 +31,141 @@ using an API key you supply.
 
 ---
 
+## Running it on a Mac
+
+### The short version
+
+```sh
+git clone <this repo> && cd ios_weight_tracker
+brew install xcodegen          # only tool you need beyond Xcode
+./scripts/bootstrap.sh         # generates Tally.xcodeproj, reports anything outstanding
+xed Tally.xcodeproj            # then ⌘R
+```
+
+**On the simulator that is genuinely all of it.** No Apple Developer account, no team ID, no
+App Group registration, no API key. The placeholder bundle prefix is fine, because a simulator
+build isn't signed against a real identity.
+
+`bootstrap.sh` is safe to re-run, and re-run it after adding or removing source files — the
+`.xcodeproj` is generated from `project.yml`, not committed, because a `.pbxproj` is thousands of
+lines of unreviewable XML that merges badly.
+
+To run the same checks CI runs: `./scripts/run-tests.sh`.
+
+### What works immediately, and what needs setup
+
+| | Simulator, no setup | Needs setup |
+|---|---|---|
+| All five screens, navigation | ✅ | |
+| Adding entries by hand, weight logging, goal calculation | ✅ | |
+| Data persisting across launches | ✅ | |
+| Correct typography | | Archivo font files — see [Fonts](#2-fonts) |
+| AI logging by text | | Your Anthropic API key, pasted into Settings |
+| Widgets showing data | | App Group registered for your team |
+| HealthKit import | | A real device (Health has no simulator data) |
+| Voice input | | A real device (no simulator microphone) |
+| Siri phrases | | A real device |
+
+### Two things you'll notice on first run
+
+**The app looks wrong until you add the fonts.** The whole design is set in Archivo, and without
+the files SwiftUI silently falls back to the system font. It won't crash, but don't judge the
+layout until they're in place — see [Fonts](#2-fonts). `bootstrap.sh` warns you if they're absent.
+
+**You may see a grey banner saying the widget won't show your data.** That is expected on a
+simulator without a registered App Group, and it is *not* data loss: Tally falls back to its own
+private container, so everything you log is saved and survives relaunching. Only the widget is
+affected, because it reads the shared container. The banner disappears once the App Group resolves.
+
+If you ever see a *red* banner saying entries are not being saved, that's different and real — no
+database could be opened at all.
+
+### Putting it on your own iPhone
+
+Three edits, and only the first is in more than one place:
+
+1. **`BUNDLE_ID_PREFIX`** in `project.yml` — change `com.example` to something you own.
+
+   This is deliberately a single edit. The bundle IDs, both entitlements files, the App Group, and
+   the keychain group all derive from it, and the runtime code derives the App Group from the
+   bundle identifier rather than hardcoding it. Nothing else needs changing.
+
+2. **`DEVELOPMENT_TEAM`** in `project.yml` — your 10-character Team ID, from Xcode ›
+   Settings › Accounts, or the Membership page of the developer portal.
+
+3. **Register the App Group** `group.<your-prefix>.tally` in the developer portal, and enable the
+   App Groups capability on **both** the app and widget targets.
+
+Then `./scripts/bootstrap.sh` again, and Run with your device selected.
+
+> Step 3 is the one worth double-checking. If the group isn't registered, or is enabled on only one
+> target, there is **no build error** — the app and widget just get separate containers and the
+> widget stays empty forever. The grey banner described above is the app telling you this happened.
+
+With a free Apple ID rather than a paid account, expect two limitations: the build expires after
+seven days, and App Groups aren't available, so you'll get the grey banner and a blank widget. The
+app itself works fine.
+
+---
+
 ## What you must fill in
 
 The repository ships without Apple-account-specific values, because they are unique to you and
-some cannot be shared. **The app will not build or run correctly until these are set.**
+some cannot be shared. **None of them are needed to run on a simulator** — see
+[Running it on a Mac](#running-it-on-a-mac). They matter for a physical device.
 
 ### 1. Signing and identifiers
 
-Set these in `project.yml` (the XcodeGen manifest that generates `Tally.xcodeproj`), or
-override them with a local `Secrets.xcconfig` — which is gitignored, so your team ID never
-lands in version control.
+Both live in `project.yml`, the XcodeGen manifest that generates `Tally.xcodeproj`. You can also
+override them with a local `Secrets.xcconfig`, which is gitignored, so your team ID never lands in
+version control.
 
-| Value | Where | What it is | If you skip it |
-|---|---|---|---|
-| `DEVELOPMENT_TEAM` | `project.yml` | Your 10-character Apple Developer Team ID, from the Membership page of the developer portal. | Builds for the simulator still work. Installing on a physical device fails to sign. |
-| Bundle ID prefix | `project.yml` | Reverse-DNS prefix you control, e.g. `com.yourname`. Targets become `<prefix>.tally` and `<prefix>.tally.widget`. | The placeholder prefix may already be taken, so provisioning fails. |
-| App Group ID | `project.yml`, both targets | `group.<prefix>.tally`. Must be registered in the developer portal and enabled on **both** the app and widget targets. | **The widget shows no data.** The App Group container is how the widget reaches the database — without it the two targets have separate sandboxes. |
-| Keychain access group | `project.yml` | `<team-id>.<prefix>.tally`. | The API key cannot be saved, so LLM logging is unavailable. |
+| Value | What it is | If you skip it |
+|---|---|---|
+| `BUNDLE_ID_PREFIX` | A reverse-DNS prefix you own, e.g. `dev.yourname`. Targets become `<prefix>.tally` and `<prefix>.tally.widget`. | Simulator builds work. On a device, the placeholder `com.example` may already be taken, and provisioning fails. |
+| `DEVELOPMENT_TEAM` | Your 10-character Apple Developer Team ID, from Xcode › Settings › Accounts. | Simulator builds work. Installing on a device fails to sign. |
 
-The App Group is the one people most often get half-right. It has to be the *same string* on
-both targets and registered in the portal; a mismatch fails silently at runtime rather than at
-build time, and presents as a permanently empty widget.
+**`BUNDLE_ID_PREFIX` is a single edit.** Everything derived from it follows automatically:
+
+- Bundle identifiers, via `project.yml`
+- The App Group and keychain group in both entitlements files, via `$(BUNDLE_ID_PREFIX)`
+  substitution
+- The App Group the *running code* looks up, which is derived from the bundle identifier at
+  runtime rather than hardcoded — `TallyDatabase.appGroupIdentifier(for:)`, unit-tested
+- The keychain service name, likewise derived from the bundle
+
+That is deliberate. When these were separate literals, changing the prefix meant editing five
+places, and missing one produced no build error — just a widget that never showed data.
+
+### The App Group, which is the one people get half-right
+
+You still have to **register** `group.<your-prefix>.tally` in the developer portal and enable the
+App Groups capability on **both** targets. A mismatch, or enabling it on only one, fails silently at
+runtime rather than at build time.
+
+Tally handles that failure deliberately rather than crashing: it falls back to its own private
+container, so **your data is still saved and survives relaunching**, and shows a grey banner
+explaining that only the widget is affected. A red banner means something worse — no database could
+be opened at all.
 
 ### 2. Fonts
 
 The design is set entirely in **Archivo** (weights 400, 600, 800). It is licensed under the SIL
 Open Font License but is not redistributed here, so fetch it yourself:
 
-1. Download from [Google Fonts](https://fonts.google.com/specimen/Archivo).
-2. Put `Archivo-Regular.ttf`, `Archivo-SemiBold.ttf`, `Archivo-ExtraBold.ttf` into
-   `App/Resources/Fonts/`.
+1. Download from [Google Fonts](https://fonts.google.com/specimen/Archivo) — the "Get font"
+   button gives you a zip.
+2. Create `App/Resources/Fonts/` and put the `.ttf` files in it. Either form works:
+   - the static faces `Archivo-Regular.ttf`, `Archivo-SemiBold.ttf`, `Archivo-ExtraBold.ttf`, or
+   - the single variable font `Archivo[wdth,wght].ttf`, which Google Fonts now ships by default.
 
-If the files are absent the app falls back to the system font rather than crashing — it will
-simply look wrong, losing the flat Modernist character the design depends on.
+   Both register the family name `Archivo`, which is what the code asks for. `project.yml` lists
+   all four filenames in `UIAppFonts`; entries for files you don't have are harmless.
+3. Re-run `./scripts/bootstrap.sh` so the new files are picked up.
+
+If the files are absent the app falls back to the system font rather than crashing — it will simply
+look wrong, losing the flat Modernist character the design depends on. `bootstrap.sh` warns you when
+it can't find them.
 
 ### 3. Info.plist usage descriptions
 
@@ -160,16 +263,16 @@ Two prerequisites that a Mac gets for free:
 
 ### The iOS app
 
-Requires a Mac with Xcode 16+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`). The `.xcodeproj` is **generated, not committed** — a YAML manifest is
-reviewable and merges cleanly, where a `.pbxproj` is neither:
+See [Running it on a Mac](#running-it-on-a-mac) — `./scripts/bootstrap.sh` does the setup. The
+short version is Xcode 16+, `brew install xcodegen`, then:
 
 ```sh
-xcodegen generate
-open Tally.xcodeproj
+./scripts/bootstrap.sh    # or: xcodegen generate
+xed Tally.xcodeproj
 ```
 
-Re-run `xcodegen generate` after adding or removing source files.
+The `.xcodeproj` is **generated, not committed**, so re-run bootstrap after adding or removing
+source files. `./scripts/run-tests.sh` runs everything CI runs, including the simulator tests.
 
 ---
 

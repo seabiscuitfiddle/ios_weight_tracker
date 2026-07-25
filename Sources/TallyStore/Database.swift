@@ -11,17 +11,33 @@ import TallyCore
 public enum TallyDatabase {
     public static let filename = "tally.sqlite"
 
-    /// The App Group whose container holds the database.
-    ///
-    /// Lives here rather than in either target because **both** the app and the widget need it and
-    /// they must agree exactly — a mismatch gives the two processes separate containers, with no
-    /// build error and a permanently empty widget as the only symptom. One constant in a module
-    /// they both link makes disagreeing impossible.
-    ///
-    /// Must match `com.apple.security.application-groups` in `App/Tally.entitlements` and
-    /// `Widget/TallyWidget.entitlements`, and be registered in the Apple developer portal. See
-    /// README, "What you must fill in".
+    /// Fallback App Group, used only when the bundle identifier can't be read (unit tests, some
+    /// tooling). Real builds derive it — see ``appGroupIdentifier(for:)``.
     public static let defaultAppGroupID = "group.com.example.tally"
+
+    /// The App Group whose container holds the shared database.
+    ///
+    /// **Derived from the bundle identifier rather than hardcoded**, so changing
+    /// `BUNDLE_ID_PREFIX` in `project.yml` updates this too. The alternative — a literal string
+    /// here — meant anyone building with their own team had to find and edit the same value in
+    /// five places, and missing one produces no build error, just a widget that never shows data.
+    ///
+    /// The app is `<prefix>.tally` and the widget `<prefix>.tally.widget`, so stripping a
+    /// `.widget` suffix gives both processes the same answer.
+    public static func appGroupIdentifier(for bundle: Bundle = .main) -> String {
+        appGroupIdentifier(forBundleIdentifier: bundle.bundleIdentifier)
+    }
+
+    /// The string half of ``appGroupIdentifier(for:)``, split out so the rule is unit-testable —
+    /// `Bundle.main` has no identifier under a test runner, which is exactly the case that would
+    /// otherwise go unverified.
+    static func appGroupIdentifier(forBundleIdentifier identifier: String?) -> String {
+        guard var identifier, !identifier.isEmpty else { return defaultAppGroupID }
+        if identifier.hasSuffix(".widget") {
+            identifier.removeLast(".widget".count)
+        }
+        return "group.\(identifier)"
+    }
 
     /// Where the database lives for a given App Group.
     ///
@@ -103,6 +119,65 @@ public enum TallyDatabase {
             throw TallyDatabaseError.appGroupUnavailable(appGroupID)
         }
         return stores(writer: try openReadWrite(at: url))
+    }
+
+    /// Where the database ended up.
+    public enum Location: Hashable, Sendable {
+        /// The shared container. Everything works, widget included.
+        case appGroup(String)
+        /// The app's own container, because the App Group wasn't available.
+        ///
+        /// Data still persists — this is the important part. The only casualty is the widget,
+        /// which reads the shared container and will show nothing.
+        case appPrivate(reason: String)
+    }
+
+    public struct OpenResult: Sendable {
+        public let stores: StoreBundle
+        public let location: Location
+    }
+
+    /// Opens the shared database, falling back to a private one if the App Group isn't available.
+    ///
+    /// The fallback exists so a plain `git clone` + Run on a simulator is genuinely usable without
+    /// first registering an App Group in the developer portal. It falls back to a **file**, not to
+    /// memory: losing every entry on relaunch would read as data loss, which is a far worse first
+    /// impression than a widget that doesn't fill in.
+    ///
+    /// It is not a silent fallback. The caller gets ``Location/appPrivate(reason:)`` and is
+    /// expected to say so in the UI — otherwise the failure resurfaces later as the widget bug
+    /// this was always meant to make visible.
+    public static func open(appGroupID: String? = nil) throws -> OpenResult {
+        let group = appGroupID ?? appGroupIdentifier()
+
+        if let sharedURL = url(forAppGroup: group) {
+            return OpenResult(
+                stores: stores(writer: try openReadWrite(at: sharedURL)),
+                location: .appGroup(group)
+            )
+        }
+
+        let localURL = try appPrivateURL()
+        return OpenResult(
+            stores: stores(writer: try openReadWrite(at: localURL)),
+            location: .appPrivate(reason: """
+                The App Group "\(group)" isn't available, so Tally is saving to its own storage. \
+                Your entries are kept, but the widget won't show them. To fix it, register that \
+                App Group for your team and enable it on both targets.
+                """)
+        )
+    }
+
+    /// The database's location inside the app's own container.
+    static func appPrivateURL() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return base.appendingPathComponent("Tally", isDirectory: true)
+            .appendingPathComponent(filename)
     }
 
     /// Read-only stores for the widget extension.

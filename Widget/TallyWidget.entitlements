@@ -3,15 +3,15 @@
 <!--
   Capabilities for the widget extension.
 
-  The App Group is how the widget reaches the database the app writes; it must be byte-identical
-  to the one in App/Tally.entitlements. Deliberately the only capability here — the widget reads
+  The App Group is how the widget reaches the database the app writes. It expands from
+  BUNDLE_ID_PREFIX in project.yml, the same as App/Tally.entitlements, so the two cannot drift. Deliberately the only capability here — the widget reads
   numbers and nothing else, so it gets no Health access and no keychain group.
 -->
 <plist version="1.0">
 <dict>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>group.com.example.tally</string>
+        <string>group.$(BUNDLE_ID_PREFIX).tally</string>
     </array>
 </dict>
 </plist>

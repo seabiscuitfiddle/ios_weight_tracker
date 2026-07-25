@@ -10,13 +10,13 @@ import TallyStore
 /// definition of "how Tally is wired up" rather than two that can drift.
 enum TallyServices {
     static func stores() throws -> StoreBundle {
-        try TallyDatabase.stores(forAppGroup: TallyDatabase.defaultAppGroupID)
+        try TallyDatabase.open().stores
     }
 
     static func parser(model: String = ParserConfiguration.default.model) -> any NutritionParser {
         AnthropicNutritionParser(
             transport: URLSessionTransport.makeDefault(),
-            keyStore: KeychainAPIKeyStore(),
+            keyStore: KeychainAPIKeyStore.forCurrentBundle(),
             configuration: ParserConfiguration(
                 model: model,
                 effort: ParserConfiguration.default.effort,
