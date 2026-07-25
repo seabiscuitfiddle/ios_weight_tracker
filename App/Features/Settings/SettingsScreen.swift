@@ -18,11 +18,14 @@ struct SettingsScreen: View {
     @State private var heightText = ""
     @State private var targetWeightText = ""
     @State private var saveError: String?
+    @State private var isImportingHealth = false
+    @State private var healthImportMessage: String?
 
     var body: some View {
         NavigationStack {
             Form {
                 aiSection
+                healthSection
                 profileSection
                 goalSection
                 aboutSection
@@ -73,6 +76,44 @@ struct SettingsScreen: View {
                 You're billed by Anthropic directly. Tally works without a key — you can \
                 always add entries by hand.
                 """)
+        }
+    }
+
+    @ViewBuilder private var healthSection: some View {
+        // Hidden entirely where Health doesn't exist, such as on iPad, rather than offered and
+        // then failing.
+        if HealthKitImporter.isAvailable {
+            Section {
+                Button {
+                    Task {
+                        isImportingHealth = true
+                        healthImportMessage = await environment.importFromHealth()
+                        isImportingHealth = false
+                    }
+                } label: {
+                    HStack {
+                        Text("Import from Health")
+                        Spacer()
+                        if isImportingHealth { ProgressView() }
+                    }
+                }
+                .disabled(isImportingHealth)
+
+                if let healthImportMessage {
+                    Text(healthImportMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Apple Health")
+            } footer: {
+                Text("""
+                    Brings across your weight and workouts from the last 90 days. Tally reads \
+                    from Health and never writes to it, and a weight you entered by hand is \
+                    never replaced. Only the active calories of a workout are counted — total \
+                    would double-count energy already in your daily estimate.
+                    """)
+            }
         }
     }
 

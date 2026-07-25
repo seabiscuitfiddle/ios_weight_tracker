@@ -20,6 +20,7 @@ final class LogModel {
 
     /// Kept so "Try again" can resend without making the user retype.
     private var lastInput: ParseInput?
+    private var lastWasSpoken = false
 
     init(stores: StoreBundle, parser: any NutritionParser, calendar: Calendar = .current) {
         self.stores = stores
@@ -38,8 +39,10 @@ final class LogModel {
         }
     }
 
-    func log(text: String) async {
-        await run(.text(text))
+    /// - Parameter spoken: true when the text came from voice transcription rather than the
+    ///   keyboard, so the entry records `.llmVoice` and the UI can show its provenance.
+    func log(text: String, spoken: Bool = false) async {
+        await run(.text(text), spoken: spoken)
     }
 
     func log(image: Data, mediaType: ParseInput.ImageMediaType, note: String?) async {
@@ -48,11 +51,12 @@ final class LogModel {
 
     func retry() async {
         guard let lastInput else { return }
-        await run(lastInput)
+        await run(lastInput, spoken: lastWasSpoken)
     }
 
-    private func run(_ input: ParseInput) async {
+    private func run(_ input: ParseInput, spoken: Bool = false) async {
         lastInput = input
+        lastWasSpoken = spoken
         isParsing = true
         errorMessage = nil
         canRetry = false
@@ -72,7 +76,7 @@ final class LogModel {
                 $0.entry(
                     on: day,
                     loggedAt: now,
-                    source: source(for: input),
+                    source: source(for: input, spoken: spoken),
                     rawInput: input.transcript,
                     calendar: calendar
                 )
@@ -102,9 +106,9 @@ final class LogModel {
         }
     }
 
-    private func source(for input: ParseInput) -> RecordSource {
+    private func source(for input: ParseInput, spoken: Bool) -> RecordSource {
         switch input {
-        case .text: .llmText
+        case .text: spoken ? .llmVoice : .llmText
         case .image: .llmPhoto
         }
     }

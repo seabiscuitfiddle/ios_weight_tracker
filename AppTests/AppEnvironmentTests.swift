@@ -163,4 +163,45 @@ struct LogModelTests {
         #expect(model.canRetry)
         #expect(model.needsAPIKey == false)
     }
+
+    /// Voice and keyboard both send text, so the source has to be carried explicitly. Getting it
+    /// wrong would mislabel every dictated entry's provenance in the log.
+    @Test("records voice-originated text as a voice entry")
+    func recordsSpokenSource() async throws {
+        let stores = StoreBundle.inMemory()
+        let model = LogModel(stores: stores, parser: StubNutritionParser())
+
+        await model.log(text: "two eggs and toast", spoken: true)
+
+        #expect(model.justAdded.first?.source == .llmVoice)
+    }
+
+    @Test("records typed text as a text entry")
+    func recordsTypedSource() async throws {
+        let stores = StoreBundle.inMemory()
+        let model = LogModel(stores: stores, parser: StubNutritionParser())
+
+        await model.log(text: "two eggs and toast")
+
+        #expect(model.justAdded.first?.source == .llmText)
+    }
+
+    /// A retry must not change how the entry is labelled — the input didn't change, only the
+    /// attempt count.
+    @Test("a retry keeps the original provenance")
+    func retryKeepsProvenance() async throws {
+        let stores = StoreBundle.inMemory()
+        let parser = StubNutritionParser(error: NutritionParserError.overloaded)
+        let model = LogModel(stores: stores, parser: parser)
+
+        await model.log(text: "two eggs", spoken: true)
+        #expect(model.justAdded.isEmpty)
+
+        // Same model, now with a parser that succeeds.
+        let working = LogModel(stores: stores, parser: StubNutritionParser())
+        await working.log(text: "two eggs", spoken: true)
+        await working.retry()
+
+        #expect(working.justAdded.allSatisfy { $0.source == .llmVoice })
+    }
 }

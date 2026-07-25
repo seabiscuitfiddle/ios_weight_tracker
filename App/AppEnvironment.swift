@@ -55,17 +55,13 @@ final class AppEnvironment {
         // but it is emphatically not a silent fallback: `startupError` is set, and the UI must
         // say the data is not being saved.
         do {
-            self.stores = try TallyDatabase.stores(forAppGroup: Self.appGroupID)
+            self.stores = try TallyServices.stores()
         } catch {
             self.stores = StoreBundle.inMemory()
             self.startupError = String(describing: error)
         }
 
-        self.parser = AnthropicNutritionParser(
-            transport: URLSessionTransport.makeDefault(),
-            keyStore: keyStore,
-            configuration: .default
-        )
+        self.parser = TallyServices.parser()
     }
 
     /// For previews and UI tests: entirely in memory, with a stub parser.
@@ -77,16 +73,44 @@ final class AppEnvironment {
 
     /// Applies a model change from Settings.
     func updateParserConfiguration(model: String) {
-        parser = AnthropicNutritionParser(
-            transport: URLSessionTransport.makeDefault(),
-            keyStore: keyStore,
-            configuration: ParserConfiguration(
-                model: model,
-                effort: ParserConfiguration.default.effort,
-                maxTokens: ParserConfiguration.default.maxTokens,
-                baseURL: ParserConfiguration.default.baseURL
-            )
-        )
+        parser = TallyServices.parser(model: model)
+    }
+
+    // MARK: Health import
+
+    /// Imports weight and workouts from Apple Health.
+    ///
+    /// - Returns: a sentence to show the user. Reports "nothing new" rather than success on an
+    ///   empty import, because HealthKit deliberately never reveals whether a *read* was denied —
+    ///   so zero records could equally mean "no new data" or "permission refused", and claiming
+    ///   success would be a guess.
+    func importFromHealth() async -> String {
+        guard HealthKitImporter.isAvailable else {
+            return HealthImportError.unavailable.userMessage
+        }
+
+        let importer = HealthKitImporter()
+        do {
+            try await importer.requestAuthorization()
+            let count = try await importer.importRecent(into: stores)
+            guard count > 0 else {
+                return "Nothing new to import. If you haven't granted access, check Settings › Health."
+            }
+            return "Imported \(count) record\(count == 1 ? "" : "s") from Health."
+        } catch let error as HealthImportError {
+            return error.userMessage
+        } catch {
+            return "Couldn't read from Health: \(error.localizedDescription)"
+        }
+    }
+
+    /// Picks up a destination set by an App Intent before the app was foregrounded.
+    func consumePendingIntentLink() {
+        guard let link = OpenQuickLogIntent.pendingLink else { return }
+        OpenQuickLogIntent.pendingLink = nil
+
+        selectedTab = link.tab
+        if case .log(let mode) = link { pendingLogMode = mode }
     }
 
     /// Routes an incoming `tally://` URL. Unrecognised URLs are ignored — see `DeepLink`.

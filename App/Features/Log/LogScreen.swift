@@ -10,7 +10,11 @@ import TallyCore
 struct LogScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: LogModel?
+    @State private var transcriber = SpeechTranscriber()
     @State private var draft = ""
+    /// Whether the current draft originated from speech. Set when a transcript populates the
+    /// field and cleared on send, so entries record how they were actually captured.
+    @State private var draftCameFromVoice = false
     @FocusState private var isComposeFocused: Bool
 
     var body: some View {
@@ -27,13 +31,36 @@ struct LogScreen: View {
             model?.load()
         }
         .onChange(of: environment.pendingLogMode) { _, mode in
-            // Arrived from a widget button or Siri. Voice and photo capture are wired in a later
-            // phase; text focus works now, and an unimplemented mode falls back to it rather
-            // than doing nothing visible.
-            guard mode != nil else { return }
-            isComposeFocused = true
+            // Arrived from a widget button or from Siri.
+            guard let mode else { return }
             environment.pendingLogMode = nil
+
+            switch mode {
+            case .text, .photo:
+                // Photo capture isn't wired yet; falling back to the keyboard keeps the button
+                // useful rather than silently doing nothing.
+                isComposeFocused = true
+            case .voice:
+                Task { await startVoice() }
+            }
         }
+        // Mirror the live transcript into the field so the user can see what was heard and fix
+        // it before sending — on-device recognition is less accurate, and an editable draft is
+        // what makes that acceptable.
+        .onChange(of: transcriber.transcript) { _, text in
+            if transcriber.isRecording, !text.isEmpty {
+                draft = text
+                draftCameFromVoice = true
+            }
+        }
+        .onDisappear { transcriber.stop() }
+    }
+
+    private func startVoice() async {
+        guard transcriber.isAvailable else { return }
+        draft = ""
+        draftCameFromVoice = false
+        await transcriber.start()
     }
 
     @ViewBuilder private var header: some View {
@@ -105,26 +132,89 @@ struct LogScreen: View {
                     .onSubmit(send)
                     .accessibilityIdentifier("log.composeField")
 
-                Button(action: send) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(Color.tallyInverted)
-                        .frame(width: 46, height: 46)
-                        .background(canSend ? Color.tallyAccent : Color.tallyDivider)
+                // While recording, the primary action is to stop — sending half a sentence is
+                // never what someone wants, so the same slot changes purpose rather than
+                // adding a second button to aim at.
+                if transcriber.isRecording {
+                    Button { transcriber.stop() } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color.tallyInverted)
+                            .frame(width: 46, height: 46)
+                            .background(Color.tallyAccent)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop recording")
+                    .accessibilityIdentifier("log.stopButton")
+                } else {
+                    Button(action: send) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(Color.tallyInverted)
+                            .frame(width: 46, height: 46)
+                            .background(canSend ? Color.tallyAccent : Color.tallyDivider)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .accessibilityLabel("Send")
+                    // Identifier as well as a label, because `.submitLabel(.send)` above gives
+                    // the keyboard's return key the label "Send" too — so a label-based query
+                    // matches two elements once the keyboard is up. Labels are for users; tests
+                    // key off this, which also means rewording the label can't break them.
+                    .accessibilityIdentifier("log.sendButton")
                 }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .accessibilityLabel("Send")
-                // Identifier as well as a label, because `.submitLabel(.send)` above gives the
-                // keyboard's return key the label "Send" too — so a label-based query matches
-                // two elements once the keyboard is up. Labels are for users; tests key off
-                // this, which also means rewording the label can't break them.
-                .accessibilityIdentifier("log.sendButton")
             }
             .padding(.horizontal, Metrics.space4)
             .padding(.vertical, Metrics.space2 + 2)
+
+            attachmentRow
         }
         .background(Color.tallyBackground)
+    }
+
+    /// The Photo · Voice row beneath the field, matching the design's compose bar.
+    @ViewBuilder private var attachmentRow: some View {
+        HStack(spacing: Metrics.space4) {
+            // Photo is shown but disabled rather than hidden: the parser already handles images,
+            // only the picker is outstanding, and hiding it would misrepresent what Tally does.
+            Label("Photo", systemImage: "camera")
+                .font(.tallyScaled(12, weight: .semibold, relativeTo: .caption))
+                .foregroundStyle(Color.tallyTertiaryText)
+
+            if transcriber.isAvailable {
+                Button {
+                    Task {
+                        if transcriber.isRecording {
+                            transcriber.stop()
+                        } else {
+                            await startVoice()
+                        }
+                    }
+                } label: {
+                    Label(
+                        transcriber.isRecording ? "Listening…" : "Voice",
+                        systemImage: transcriber.isRecording ? "waveform" : "mic"
+                    )
+                    .font(.tallyScaled(12, weight: .semibold, relativeTo: .caption))
+                    .foregroundStyle(transcriber.isRecording ? Color.tallyAccent : Color.tallySecondaryText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("log.voiceButton")
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, Metrics.space4 + 2)
+        .padding(.bottom, Metrics.space2 + 1)
+        .overlay(alignment: .top) {
+            if let message = transcriber.errorMessage {
+                Text(message)
+                    .font(.tallyScaled(11, weight: .regular, relativeTo: .caption2))
+                    .foregroundStyle(Color.tallyAccent)
+                    .padding(.horizontal, Metrics.space4 + 2)
+                    .offset(y: -Metrics.space3)
+            }
+        }
     }
 
     private var canSend: Bool {
@@ -135,8 +225,11 @@ struct LogScreen: View {
     private func send() {
         guard canSend, let model else { return }
         let text = draft
+        let spoken = draftCameFromVoice
         draft = ""
-        Task { await model.log(text: text) }
+        draftCameFromVoice = false
+        transcriber.stop()
+        Task { await model.log(text: text, spoken: spoken) }
     }
 }
 
