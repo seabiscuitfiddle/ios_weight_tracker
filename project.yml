@@ -5,11 +5,16 @@
 # information in a form a human can read and a diff can show.
 #
 # ┌─────────────────────────────────────────────────────────────────────────────────────┐
-# │ VALUES YOU MUST CHANGE BEFORE BUILDING — see README "What you must fill in"          │
+# │ VALUES YOU MUST SUPPLY BEFORE BUILDING ON A DEVICE — see README "What you must       │
+# │ fill in". None of them are needed for the simulator.                                 │
 # │                                                                                      │
-# │  1. BUNDLE_ID_PREFIX below → a reverse-DNS prefix you control                        │
-# │  2. DEVELOPMENT_TEAM below → your 10-character Apple Developer Team ID               │
+# │  1. BUNDLE_ID_PREFIX → a reverse-DNS prefix you control                              │
+# │  2. DEVELOPMENT_TEAM → your 10-character Apple Developer Team ID                     │
 # │  3. Register the App Group `group.<prefix>.tally` in the developer portal            │
+# │                                                                                      │
+# │ Set 1 and 2 in a local `.env` — copy `.env.example` — NOT in this file. This file is │
+# │ public and an Apple Team ID identifies its owner. `./scripts/bootstrap.sh` loads     │
+# │ the .env and XcodeGen substitutes the ${...} references below at generation time.    │
 # │                                                                                      │
 # │ The App Group is the one that fails quietly: a mismatch between here and the portal  │
 # │ produces a widget that is permanently empty, with no build error to explain it.      │
@@ -24,13 +29,25 @@ options:
   groupSortPosition: top
   generateEmptyDirectories: true
 
-# Referenced below as ${BUNDLE_ID_PREFIX}. Changing it here updates the app, the widget, the
-# App Group, and the keychain group together — they must agree.
+# One prefix, referenced everywhere as ${BUNDLE_ID_PREFIX}: the app, the widget, the App Group
+# and the keychain group all derive from it, and they must agree.
+#
+# Two substitutions are in play and it is worth knowing which is which. XcodeGen replaces
+# ${VAR} at *generation* time when VAR is in the environment; anything it leaves alone is
+# expanded by Xcode at *build* time from the build settings defined here. That is why the
+# fallback below is a literal: with no .env, `xcodegen generate` leaves ${BUNDLE_ID_PREFIX}
+# in place and Xcode resolves it to com.example, so a fresh clone still builds.
 settings:
   base:
+    # Overridden by BUNDLE_ID_PREFIX in your .env. Never put a real prefix here.
     BUNDLE_ID_PREFIX: com.example
-    # Leave empty to build for the simulator without signing. Fill in to run on a device.
-    DEVELOPMENT_TEAM: ""
+    # Empty is correct for the simulator, so no fallback is wanted: with no .env this expands
+    # to nothing and the build is simply unsigned.
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    # The single definition of the shared container, referenced by both entitlements files.
+    # The widget's own bundle identifier is <prefix>.tally.widget, but it must open the app's
+    # group, so this is spelled out once here rather than derived per-target.
+    APP_GROUP_ID: group.${BUNDLE_ID_PREFIX}.tally
     SWIFT_VERSION: "6.0"
     # Warnings-as-errors is off deliberately: a warning should not stop someone building the
     # app to try it, and CI checks the same code with its own stricter settings.
@@ -70,6 +87,8 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         CODE_SIGN_ENTITLEMENTS: App/Tally.entitlements
         ENABLE_PREVIEWS: YES
+        # App/Resources/Assets.xcassets. Regenerate the artwork with scripts/render-icon.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: App/Info.plist
       properties:
