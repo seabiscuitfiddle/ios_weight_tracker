@@ -230,21 +230,26 @@ anyone who has the app.
 | Phase | State |
 |---|---|
 | 1. Toolchain, package scaffold | Done |
-| 2. Domain model and storage | Done — 175 tests |
+| 2. Domain model and storage | Done |
 | 3. Goal engine | Done |
 | 4. LLM nutrition parser | Done |
-| 5. Xcode project, design system, CI | Done |
-| 6. Screens | Today, Log, History, Progress, Settings built — not yet run |
-| 7. Widgets and deep links | Both widgets and routing built — not yet run |
+| 5. Xcode project, design system, CI | Done — CI green on both platforms |
+| 6. Screens | Today, Log, History, Progress, Settings — build and launch |
+| 7. Widgets and deep links | Both widgets build; `.appex` validates |
 | 8. HealthKit, voice, Siri | Not started |
-| 9. Polish, UI tests, docs | Smoke tests written; polish pending |
+| 9. Polish, UI tests, docs | Smoke tests passing; visual polish pending |
 
-> ⚠️ **The app and widget targets have never been compiled.** They were written on a Linux
-> machine, where SwiftUI, WidgetKit, and the Keychain APIs do not exist. The package (everything
-> under `Sources/`) is built and tested continuously and is known good; everything under `App/`
-> and `Widget/` is unverified until CI runs on a macOS runner or you open it in Xcode. **Expect
-> to fix compile errors on the first build.** They should be shallow — missing imports, renamed
-> SwiftUI modifiers — because the logic those files call into is already tested.
+CI currently verifies, on every push:
+
+- **188 tests** — 175 in the package on Linux, 10 app unit tests and 3 UI tests on an iOS simulator
+- The app and widget compile, and `Tally.app` and `TallyWidget.appex` both validate
+- The app launches, all four tabs are reachable, and the compose field enables sending
+
+> ⚠️ **Nobody has looked at this app yet.** It compiles, launches, and its logic is well covered,
+> but no screenshot of it has ever been seen — it was written on Linux against a design spec.
+> Expect layout and spacing to need work once you run it: numbers that overflow their frames,
+> spacing that reads differently on device than the design's mockups, and the Archivo font not
+> loading until you add the files (see above).
 
 Still to do:
 
