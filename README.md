@@ -236,14 +236,31 @@ anyone who has the app.
 | 5. Xcode project, design system, CI | Done — CI green on both platforms |
 | 6. Screens | Today, Log, History, Progress, Settings — build and launch |
 | 7. Widgets and deep links | Both widgets build; `.appex` validates |
-| 8. HealthKit, voice, Siri | Not started |
+| 8. HealthKit, voice, Siri | Done |
 | 9. Polish, UI tests, docs | Smoke tests passing; visual polish pending |
 
 CI currently verifies, on every push:
 
-- **188 tests** — 175 in the package on Linux, 10 app unit tests and 3 UI tests on an iOS simulator
+- **210 tests** — 194 in the package on Linux, 13 app unit tests and 3 UI tests on an iOS simulator
 - The app and widget compile, and `Tally.app` and `TallyWidget.appex` both validate
 - The app launches, all four tabs are reachable, and the compose field enables sending
+
+### Health, voice, and Siri
+
+**Apple Health** import is read-only and user-triggered from Settings — Tally never writes to
+Health and never syncs. Three rules are worth knowing because they're deliberate: a weight you
+entered by hand is never overwritten; only one reading per day is taken, the earliest, since a
+late-evening reading followed by a morning one would manufacture a swing that never happened; and
+only a workout's **active** calories are counted, because total energy includes the basal calories
+already inside your expenditure estimate.
+
+**Voice** transcribes on the device (`requiresOnDeviceRecognition`). Audio never leaves the phone —
+only the resulting text, and only if you send it. The transcript lands in the editable field first,
+which is what makes on-device accuracy acceptable.
+
+**Siri** works without opening the app: "log food in Tally", "how many calories do I have left in
+Tally", "log my weight in Tally". The logging phrase confirms with the number it recorded rather
+than just "done", so a bad estimate is noticeable while it's still easy to correct.
 
 > ⚠️ **Nobody has looked at this app yet.** It compiles, launches, and its logic is well covered,
 > but no screenshot of it has ever been seen — it was written on Linux against a design spec.
@@ -253,10 +270,13 @@ CI currently verifies, on every push:
 
 Still to do:
 
-- HealthKit import, on-device voice transcription, and Siri/App Shortcuts (phase 8)
-- Photo capture in the Log screen — the parser handles images, the picker isn't wired yet
-- Editing an existing entry's macros; the Log screen's saved cards can currently only be deleted
-- A real first-run onboarding flow, rather than sending new users to Settings
+- **Photo capture** in the Log screen. The parser already handles images end to end and is tested;
+  only the camera/library picker is missing, which is why the button is visible but disabled.
+- **Editing a logged entry's numbers.** Saved cards can be deleted but not corrected, which
+  undercuts the "estimates are editable" premise the design leans on.
+- **First-run onboarding**, rather than sending new users to Settings to find the fields the goal
+  engine needs.
+- **Visual polish against real screenshots** — see the warning above.
 
 `design/tally-design.html` is the source design, kept for reference. Open it in a browser to see
 the six specified surfaces.
