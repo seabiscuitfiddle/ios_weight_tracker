@@ -418,12 +418,17 @@ Everything account-specific is kept out of tracked files by construction rather 
 |---|---|---|
 | `.env`, gitignored | `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | An Apple Team ID identifies its owner. Template: `.env.example`. |
 | GitHub repository secrets | The same two, optional | Only needed if you add a job that signs for a device. |
-| The device keychain | Your API keys, one item per provider | Entered in Settings at runtime. There is no build-time key, so no binary can leak one. |
+| The device keychain | Your API keys, one item per provider, keyed by provider id | Entered in Settings at runtime. There is no build-time key for any provider, so no binary can leak one, and no provider can be sent a key minted for another. |
 
 Three things enforce it, in increasing order of how late they catch you:
 
 1. `scripts/check-secrets.sh` — scans tracked files for API keys, Team IDs, hardcoded App
-   Groups, and personal email addresses. Each finding prints what to do about it.
+   Groups, and personal email addresses. Each finding prints what to do about it. The key
+   patterns are matched by *shape* rather than by vendor — `sk-` followed by a long opaque
+   string covers Anthropic, OpenAI, OpenRouter, DeepSeek, Moonshot and Alibaba alike, with a
+   second pattern for Zhipu's `id.secret` form — so adding a provider to Settings does not
+   quietly leave a new key shape unguarded. Short fixtures like `sk-ant-test` are below the
+   length floor and don't trip it.
 2. A **pre-commit hook**, installed by `./scripts/bootstrap.sh`, running that same script over
    what is staged. `git commit --no-verify` still bypasses it; it is a safety net, not a lock.
 3. A **CI job**, so a leak fails the build even if the hook was never installed.
@@ -450,12 +455,12 @@ Optional, only if you want the extra capability:
 | Secret | Enables | Notes |
 |---|---|---|
 | `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | Generating the project with your own identifiers, for a job that builds or signs for a device. | Both are read by the "Generate project" step. Absent — the normal case, and always on forks — the placeholders in `project.yml` are used instead. |
-| `ANTHROPIC_API_KEY` | A smoke test that calls the real API once, verifying the request shape against the live endpoint. | Costs a fraction of a cent per run. The job is skipped when the secret is absent, so forks are unaffected. Never required — the parser's own tests use recorded fixtures and no network. |
 | `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY` | TestFlight / App Store distribution. | Not used by the current workflow. Only add these if you add a release job. |
 
-Do not add secrets you don't need. In particular there is no build-time API key: Tally reads
-the key from the device Keychain at runtime, so baking one into the binary would leak it to
-anyone who has the app.
+Do not add secrets you don't need. **There is no API key secret, for any provider, and nothing
+here needs one.** Tally reads keys from the device Keychain at runtime, so baking one in would
+leak it to anyone who has the app — and CI proves the wire formats against recorded fixtures
+rather than against a live endpoint, which is faster, free, and works on forks.
 
 ---
 
@@ -475,7 +480,9 @@ anyone who has the app.
 
 CI currently verifies, on every push:
 
-- **210 tests** — 194 in the package on Linux, 13 app unit tests and 3 UI tests on an iOS simulator
+- **279 tests** — 263 in the package on Linux, 13 app unit tests and 3 UI tests on an iOS
+  simulator. Both LLM wire formats are covered by recorded fixtures, so no key and no network
+  are needed to verify what Tally actually sends
 - The app and widget compile, and `Tally.app` and `TallyWidget.appex` both validate
 - The app launches, all four tabs are reachable, and the compose field enables sending
 

@@ -77,10 +77,24 @@ scan() {
     fi
 }
 
-# Anthropic keys. sk-ant-test and friends are fixtures in the parser tests and are meant to be
-# there, so only flag things long enough to be real.
-scan "Possible Anthropic API key" \
-    'sk-ant-[A-Za-z0-9_-]{20,}' \
+# Provider API keys.
+#
+# One pattern rather than one per vendor, because they converged on the same shape: Anthropic
+# (sk-ant-), OpenAI (sk-proj-, sk-admin-, sk-svcacct-), OpenRouter (sk-or-v1-), DeepSeek,
+# Moonshot and Alibaba all issue `sk-` followed by a long opaque string. A per-vendor list would
+# be one prefix behind every time a provider is added to Settings.
+#
+# The {20,} floor is what keeps the test fixtures — sk-ant-test, sk-proj-test, sk-or-test — and
+# the placeholder strings in the provider definitions from tripping it. Nothing that short is a
+# real key.
+scan "Possible API key" \
+    'sk-[A-Za-z0-9_-]{20,}' \
+    "Keys are entered in-app and stored in the keychain; none should ever be in a file."
+
+# Zhipu issues `{id}.{secret}` instead, which matches none of the above and would otherwise be
+# the one supported provider whose key could be committed unnoticed.
+scan "Possible Zhipu API key" \
+    '[0-9a-f]{32}\.[A-Za-z0-9]{16}' \
     "Keys are entered in-app and stored in the keychain; none should ever be in a file."
 
 # DEVELOPMENT_TEAM with an actual value. The placeholder empty string and the ${DEVELOPMENT_TEAM}

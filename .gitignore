@@ -29,8 +29,8 @@ Widget/Info.plist
 .env.*
 !.env.example
 
-# Secrets — the Anthropic API key is entered in-app and stored in the Keychain.
-# Nothing here should ever hold one.
+# Secrets — provider API keys are entered in-app and stored in the Keychain, one item per
+# provider. Nothing here should ever hold one.
 *.p8
 *.p12
 *.mobileprovision
