@@ -80,12 +80,12 @@ public struct LLMProvider: Hashable, Sendable, Codable, Identifiable {
     /// than tolerating it, while most compatible-mode endpoints only ever implemented
     /// `max_tokens`. There is no value that works on both, so it has to be declared.
     public var usesMaxCompletionTokens: Bool
-    /// Whether `reasoning_effort` may be sent.
+    /// Whether a reasoning-effort hint may be sent, and for which models.
     ///
-    /// Off by default because compatible-mode endpoints vary in whether they ignore unknown
-    /// parameters or reject the whole request, and a 400 that names a field the user never chose
-    /// is a miserable thing to debug.
-    public var sendsReasoningEffort: Bool
+    /// ``EffortSupport/never`` by default because compatible-mode endpoints vary in whether they
+    /// ignore unknown parameters or reject the whole request, and a 400 that names a field the
+    /// user never chose is a miserable thing to debug.
+    public var effortSupport: EffortSupport
     /// Where a user goes to get a key, linked from settings UI.
     public var consoleURL: URL?
     /// Shown as the key field's placeholder, so an obviously wrong paste is visible immediately.
@@ -106,7 +106,7 @@ public struct LLMProvider: Hashable, Sendable, Codable, Identifiable {
         defaultModel: String,
         extraHeaders: [String: String] = [:],
         usesMaxCompletionTokens: Bool = false,
-        sendsReasoningEffort: Bool = false,
+        effortSupport: EffortSupport = .never,
         consoleURL: URL? = nil,
         keyPlaceholder: String = "sk-…",
         isBuiltIn: Bool = true
@@ -123,7 +123,7 @@ public struct LLMProvider: Hashable, Sendable, Codable, Identifiable {
         self.defaultModel = defaultModel
         self.extraHeaders = extraHeaders
         self.usesMaxCompletionTokens = usesMaxCompletionTokens
-        self.sendsReasoningEffort = sendsReasoningEffort
+        self.effortSupport = effortSupport
         self.consoleURL = consoleURL
         self.keyPlaceholder = keyPlaceholder
         self.isBuiltIn = isBuiltIn
@@ -159,12 +159,33 @@ public struct LLMProvider: Hashable, Sendable, Codable, Identifiable {
         usesMaxCompletionTokens = try container.decodeIfPresent(
             Bool.self, forKey: .usesMaxCompletionTokens
         ) ?? false
-        sendsReasoningEffort = try container.decodeIfPresent(
-            Bool.self, forKey: .sendsReasoningEffort
-        ) ?? false
+        effortSupport = try Self.decodeEffortSupport(from: decoder)
         consoleURL = try container.decodeIfPresent(URL.self, forKey: .consoleURL)
         keyPlaceholder = try container.decodeIfPresent(String.self, forKey: .keyPlaceholder) ?? "sk-…"
         isBuiltIn = try container.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+    }
+
+    /// Reads ``effortSupport``, falling back to the boolean this field replaced.
+    ///
+    /// The boolean said "this endpoint takes an effort hint", which turned out to be a claim
+    /// about the wrong thing — see ``EffortSupport``. A document written by an older build gets
+    /// the honest reading of what it meant: ask the model, don't assume.
+    private static func decodeEffortSupport(from decoder: any Decoder) throws -> EffortSupport {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let support = try container.decodeIfPresent(EffortSupport.self, forKey: .effortSupport) {
+            return support
+        }
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let sendsReasoningEffort = try legacy.decodeIfPresent(
+            Bool.self, forKey: .sendsReasoningEffort
+        ) ?? false
+        return sendsReasoningEffort ? .knownModels : .never
+    }
+
+    /// Keys this type no longer writes but still reads. Kept out of `CodingKeys` so the
+    /// synthesised encoder doesn't have to account for a field that has no property.
+    private enum LegacyCodingKeys: String, CodingKey {
+        case sendsReasoningEffort
     }
 }
 
@@ -183,6 +204,9 @@ extension LLMProvider {
         acceptsImages: true,
         suggestedModels: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
         defaultModel: "claude-opus-5",
+        // Haiku is in that list and rejects `output_config.effort`, as do Sonnet 4.5 and every
+        // Claude 3 — so the hint has to be decided per model, not per provider.
+        effortSupport: .knownModels,
         consoleURL: URL(string: "https://console.anthropic.com/settings/keys"),
         keyPlaceholder: "sk-ant-…"
     )
@@ -198,7 +222,9 @@ extension LLMProvider {
         suggestedModels: ["gpt-5.2", "gpt-5.2-mini", "gpt-4.1", "gpt-4.1-mini"],
         defaultModel: "gpt-5.2-mini",
         usesMaxCompletionTokens: true,
-        sendsReasoningEffort: true,
+        // Only the reasoning models take `reasoning_effort`; the GPT-4.1 pair in that list
+        // rejects it.
+        effortSupport: .knownModels,
         consoleURL: URL(string: "https://platform.openai.com/api-keys"),
         keyPlaceholder: "sk-proj-…"
     )
@@ -225,9 +251,10 @@ extension LLMProvider {
             "anthropic/claude-haiku-4.5",
         ],
         defaultModel: "deepseek/deepseek-chat",
-        // OpenRouter normalises OpenAI's parameters across every upstream it routes to, so the
-        // effort hint is safe to send here even when the model behind it is not an OpenAI one.
-        sendsReasoningEffort: true,
+        // OpenRouter normalises OpenAI's parameters across every upstream it routes to, dropping
+        // the hint for models that can't use it rather than passing it through — so this is the
+        // one provider where sending it unconditionally is safe.
+        effortSupport: .always,
         consoleURL: URL(string: "https://openrouter.ai/keys"),
         keyPlaceholder: "sk-or-v1-…"
     )

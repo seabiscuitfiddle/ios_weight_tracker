@@ -199,7 +199,7 @@ struct ParseRequestTests {
     func honoursConfiguration() async throws {
         let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
         let configuration = ParserConfiguration(
-            model: "claude-haiku-4-5",
+            model: "claude-sonnet-4-6",
             effort: "medium",
             maxTokens: 1024,
             baseURL: URL(string: "https://example.test/v1/messages")!
@@ -208,7 +208,7 @@ struct ParseRequestTests {
         _ = try? await makeParser(transport, configuration: configuration).parse(.text("toast"))
 
         let body = try #require(transport.lastBody)
-        #expect(body["model"] as? String == "claude-haiku-4-5")
+        #expect(body["model"] as? String == "claude-sonnet-4-6")
         #expect(body["max_tokens"] as? Int == 1024)
         #expect((body["output_config"] as? [String: Any])?["effort"] as? String == "medium")
         #expect(transport.lastRequest?.url?.host == "example.test")

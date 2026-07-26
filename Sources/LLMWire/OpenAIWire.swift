@@ -44,8 +44,11 @@ enum OpenAIWire {
         body[provider.usesMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"] =
             request.maxTokens
 
-        if let effort = request.effort, provider.sendsReasoningEffort {
-            body["reasoning_effort"] = effort.rawValue
+        // Gated on the model as well as the provider: `reasoning_effort` is a reasoning-model
+        // field, and the same endpoint serves models that reject it.
+        if let effort = request.effort,
+           let value = provider.effortValue(effort, model: model) {
+            body["reasoning_effort"] = value
         }
 
         if let temperature = request.temperature {

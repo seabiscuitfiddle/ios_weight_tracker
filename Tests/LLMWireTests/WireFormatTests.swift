@@ -90,14 +90,60 @@ struct AnthropicRequestTests {
         var request = testRequest(effort: .medium)
         request.maxTokens = 1024
 
-        _ = try? await ChatClient(provider: provider, model: "claude-haiku-4-5", transport: transport)
-            .complete(request, apiKey: "k")
+        _ = try? await ChatClient(
+            provider: provider, model: "claude-sonnet-4-6", transport: transport
+        ).complete(request, apiKey: "k")
 
         let body = try #require(transport.lastBody)
-        #expect(body["model"] as? String == "claude-haiku-4-5")
+        #expect(body["model"] as? String == "claude-sonnet-4-6")
         #expect(body["max_tokens"] as? Int == 1024)
         #expect((body["output_config"] as? [String: Any])?["effort"] as? String == "medium")
         #expect(transport.lastRequest?.url?.host == "example.test")
+    }
+
+    /// The hint is a model capability, not an endpoint one. Sending it to a model that doesn't
+    /// publish an effort level fails the whole request over a field the user never chose — and
+    /// two of the three models in the shipped picker are in that position.
+    @Test(
+        "sends effort only to the models that publish a level",
+        arguments: [
+            ("claude-opus-5", "low"),
+            ("claude-opus-4-5-20251101", "low"),
+            ("claude-sonnet-5", "low"),
+            ("claude-sonnet-4-6", "low"),
+            ("claude-fable-5", "low"),
+            ("claude-haiku-4-5", nil),
+            ("claude-haiku-4-5-20251001", nil),
+            ("claude-sonnet-4-5-20250929", nil),
+            ("claude-sonnet-4-20250514", nil),
+            ("claude-opus-4-1-20250805", nil),
+            ("claude-opus-4-20250514", nil),
+            ("claude-3-opus-20240229", nil),
+            ("claude-3-5-sonnet-20241022", nil),
+            ("some-local-model", nil),
+        ] as [(String, String?)]
+    )
+    func effortPerModel(_ model: String, _ expected: String?) async throws {
+        let transport = StubTransport(json: Recorded.anthropic(#"{"ok":true}"#))
+        _ = try? await ChatClient(provider: .anthropic, model: model, transport: transport)
+            .complete(testRequest(effort: .low), apiKey: "k")
+
+        let body = try #require(transport.lastBody)
+        let outputConfig = body["output_config"] as? [String: Any]
+        #expect(outputConfig?["effort"] as? String == expected)
+        // The schema still has to travel, whatever happened to the hint.
+        #expect(outputConfig?["format"] != nil)
+    }
+
+    /// `minimal` is an OpenAI level. Stepping to the least thinking Anthropic *can* express is
+    /// nearer the caller's intent than a rejected request.
+    @Test("steps an effort level Anthropic doesn't publish down to one it does")
+    func effortLevelClamped() async throws {
+        let transport = StubTransport(json: Recorded.anthropic(#"{"ok":true}"#))
+        _ = try? await client(transport).complete(testRequest(effort: .minimal), apiKey: "k")
+
+        let body = try #require(transport.lastBody)
+        #expect((body["output_config"] as? [String: Any])?["effort"] as? String == "low")
     }
 }
 
@@ -183,6 +229,41 @@ struct OpenAIRequestTests {
             .complete(testRequest(effort: .low), apiKey: "k")
         let deepSeekBody = try #require(deepSeek.lastBody)
         #expect(deepSeekBody["reasoning_effort"] == nil)
+    }
+
+    /// `reasoning_effort` is a reasoning-model field, and OpenAI serves both kinds from the same
+    /// URL — including the GPT-4.1 pair the model picker offers.
+    @Test(
+        "sends reasoning effort only to the models that take it",
+        arguments: [
+            ("gpt-5.2-mini", "low"),
+            ("gpt-5", "low"),
+            ("o3", "low"),
+            ("o4-mini", "low"),
+            ("gpt-4.1", nil),
+            ("gpt-4.1-mini", nil),
+            ("gpt-4o", nil),
+        ] as [(String, String?)]
+    )
+    func reasoningEffortPerModel(_ model: String, _ expected: String?) async throws {
+        let transport = StubTransport(json: Recorded.openAI(#"{"ok":true}"#))
+        _ = try? await client(transport, model: model)
+            .complete(testRequest(effort: .low), apiKey: "k")
+
+        let body = try #require(transport.lastBody)
+        #expect(body["reasoning_effort"] as? String == expected)
+    }
+
+    /// The one provider where the hint is safe to send blind: OpenRouter drops what the upstream
+    /// model can't use rather than passing it through.
+    @Test("sends reasoning effort to any model behind a normalising gateway")
+    func reasoningEffortThroughGateway() async throws {
+        let transport = StubTransport(json: Recorded.openAI(#"{"ok":true}"#))
+        _ = try? await client(transport, provider: .openRouter, model: "deepseek/deepseek-chat")
+            .complete(testRequest(effort: .low), apiKey: "k")
+
+        let body = try #require(transport.lastBody)
+        #expect(body["reasoning_effort"] as? String == "low")
     }
 
     @Test("sends a photo as a data URI image part")

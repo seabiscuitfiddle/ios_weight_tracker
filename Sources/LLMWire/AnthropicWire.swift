@@ -55,8 +55,12 @@ enum AnthropicWire {
         ]
 
         var outputConfig: [String: Any] = [:]
-        if let effort = request.effort {
-            outputConfig["effort"] = effort.rawValue
+        // Only for models that publish an effort level. Sonnet 4.5, every Haiku so far, and all
+        // of Claude 3 reject `output_config.effort` outright, and the caller picked the model
+        // from a free-text field — so this is decided from the identifier, not assumed.
+        if let effort = request.effort,
+           let value = provider.effortValue(effort, model: model) {
+            outputConfig["effort"] = value
         }
         // Only the native path sets a format here. Under the other styles the schema has already
         // been folded into the system prompt by `ChatClient`, and sending it twice would waste

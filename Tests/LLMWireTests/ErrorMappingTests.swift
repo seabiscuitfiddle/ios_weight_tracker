@@ -392,6 +392,25 @@ struct ProviderTests {
         #expect(provider.endpoint.host == "example.test")
         #expect(provider.structuredOutput == .prompt)
         #expect(provider.isBuiltIn == false)
+        #expect(provider.effortSupport == .never)
+    }
+
+    /// `sendsReasoningEffort` claimed the endpoint took an effort hint, which turned out to be a
+    /// claim about the wrong thing. A document written by an older build gets the honest reading
+    /// of what it meant.
+    @Test("reads the boolean that effortSupport replaced")
+    func legacyEffortFlag() throws {
+        let base = #""id":"custom","endpoint":"https://example.test/v1/chat/completions""#
+
+        let enabled = try JSONDecoder().decode(
+            LLMProvider.self, from: Data(#"{\#(base),"sendsReasoningEffort":true}"#.utf8)
+        )
+        #expect(enabled.effortSupport == .knownModels)
+
+        let disabled = try JSONDecoder().decode(
+            LLMProvider.self, from: Data(#"{\#(base),"sendsReasoningEffort":false}"#.utf8)
+        )
+        #expect(disabled.effortSupport == .never)
     }
 
     @Test("round-trips through Codable")
