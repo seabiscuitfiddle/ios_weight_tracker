@@ -7,10 +7,10 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let startupError = environment.startupError {
-                StorageBanner(detail: startupError, severity: .notSaving)
-            } else if let notice = environment.storageNotice {
-                StorageBanner(detail: notice, severity: .widgetOnly)
+            if let banner = environment.visibleBanner {
+                StorageBanner(detail: banner.detail, severity: banner.severity) {
+                    environment.dismissBanner(banner.severity)
+                }
             }
 
             // Content and tab bar are stacked by hand rather than using `TabView`, because the
@@ -119,8 +119,14 @@ struct TallyTabBar: View {
 /// emergency and has to be loud. "Saved, but the widget can't see it" is a setup detail that
 /// shouldn't look like data loss — but must still be said, or it resurfaces later as a widget
 /// that mysteriously stays blank.
+///
+/// Either can be closed. Both describe conditions the user may have decided to live with — a
+/// simulator build with no App Group, most of all — and a permanent bar across the top of every
+/// screen is soon read as furniture rather than as a warning. Installing a new version brings it
+/// back; see ``BannerDismissals``.
 struct StorageBanner: View {
-    enum Severity {
+    /// Raw values are persisted as dismissal keys, so renaming one re-shows that banner once.
+    enum Severity: String {
         /// No database at all; entries will be lost.
         case notSaving
         /// Persisting locally, but outside the shared container the widget reads.
@@ -150,14 +156,37 @@ struct StorageBanner: View {
 
     let detail: String
     let severity: Severity
+    let onDismiss: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Metrics.space1) {
-            Text(severity.title)
-                .font(.tallyScaled(13, weight: .heavy))
-            Text(detail)
-                .font(.tallyScaled(11, weight: .regular, relativeTo: .caption))
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: Metrics.space2) {
+            VStack(alignment: .leading, spacing: Metrics.space1) {
+                Text(severity.title)
+                    .font(.tallyScaled(13, weight: .heavy))
+                Text(detail)
+                    .font(.tallyScaled(11, weight: .regular, relativeTo: .caption))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Combined so VoiceOver reads the warning as one sentence — but applied to the text
+            // alone, or it would swallow the close button along with it.
+            .accessibilityElement(children: .combine)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .heavy))
+                    // The glyph is small; the hit area isn't. A close button that's awkward to
+                    // hit reads as a banner that won't go away.
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("banner.dismiss")
+            // Pulls the oversized hit area back so the glyph optically aligns with the title
+            // and the banner's own padding.
+            .padding(.top, -Metrics.space2)
+            .padding(.trailing, -Metrics.space2)
         }
         .foregroundStyle(severity.foreground)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -166,6 +195,5 @@ struct StorageBanner: View {
         .overlay(alignment: .bottom) {
             if severity == .widgetOnly { TallyRule() }
         }
-        .accessibilityElement(children: .combine)
     }
 }

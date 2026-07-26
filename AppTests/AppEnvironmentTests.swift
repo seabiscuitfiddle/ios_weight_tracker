@@ -50,6 +50,64 @@ struct AppEnvironmentTests {
     }
 }
 
+/// The rule that matters here is the expiry: a dismissal is scoped to the build that was running
+/// when it was made, so an update always shows the warning again.
+@Suite("Banner dismissals")
+struct BannerDismissalTests {
+    /// A defaults suite of its own per test, so one test can't see another's writes — or the
+    /// simulator's leftovers from a previous run.
+    private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
+        let name = "tally.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        try body(defaults)
+    }
+
+    @Test("a dismissed banner stays dismissed on the next launch")
+    func survivesRelaunch() {
+        withDefaults { defaults in
+            BannerDismissals(defaults: defaults, version: "1.0 (1)").dismiss("widgetOnly")
+
+            // A fresh instance is what the next launch builds.
+            let relaunched = BannerDismissals(defaults: defaults, version: "1.0 (1)")
+
+            #expect(relaunched.dismissed() == ["widgetOnly"])
+        }
+    }
+
+    @Test("a new build shows the banner again")
+    func expiresOnUpdate() {
+        withDefaults { defaults in
+            BannerDismissals(defaults: defaults, version: "1.0 (1)").dismiss("widgetOnly")
+
+            #expect(BannerDismissals(defaults: defaults, version: "1.0 (2)").dismissed().isEmpty)
+            #expect(BannerDismissals(defaults: defaults, version: "1.1 (1)").dismissed().isEmpty)
+        }
+    }
+
+    /// The two banners describe different problems, and the milder one is the one users will
+    /// close. Closing it must not pre-dismiss "nothing is being saved".
+    @Test("dismissing one banner leaves the other showing")
+    func dismissalsAreIndependent() {
+        withDefaults { defaults in
+            let dismissals = BannerDismissals(defaults: defaults, version: "1.0 (1)")
+
+            dismissals.dismiss("widgetOnly")
+
+            #expect(dismissals.dismissed().contains("notSaving") == false)
+        }
+    }
+
+    @Test("a memory-only store writes nothing to disk")
+    func memoryOnly() {
+        withDefaults { defaults in
+            BannerDismissals(defaults: nil, version: "1.0 (1)").dismiss("widgetOnly")
+
+            #expect(BannerDismissals(defaults: defaults, version: "1.0 (1)").dismissed().isEmpty)
+        }
+    }
+}
+
 @MainActor
 @Suite("Today model")
 struct TodayModelTests {

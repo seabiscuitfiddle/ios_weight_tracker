@@ -1,11 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!--
-	No account-specific identifiers here. Both values are build settings Xcode expands, so this
-	file reads the same in every clone. APP_GROUP_ID comes from project.yml, which takes it from
-	your .env; the keychain group is the target's own bundle identifier, which cannot drift from
-	it. See README, "What you must fill in".
--->
 <plist version="1.0">
 <dict>
 	<key>com.apple.developer.healthkit</key>
@@ -13,9 +7,7 @@
 	<key>com.apple.developer.healthkit.access</key>
 	<array/>
 	<key>com.apple.security.application-groups</key>
-	<array>
-		<string>$(APP_GROUP_ID)</string>
-	</array>
+	<array/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>

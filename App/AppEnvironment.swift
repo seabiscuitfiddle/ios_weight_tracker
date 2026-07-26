@@ -31,6 +31,12 @@ final class AppEnvironment {
     /// Rebuilt whenever settings change, because the model and key can both be edited.
     private(set) var parser: any NutritionParser
 
+    /// Banners the user has closed under this build. Mirrored in memory as well as on disk
+    /// because `@Observable` can't see a write to `UserDefaults`, and the banner has to go the
+    /// moment it's tapped.
+    private(set) var dismissedBanners: Set<StorageBanner.Severity> = []
+    private let bannerDismissals: BannerDismissals
+
     var selectedTab: DeepLink.Tab = .today
     /// Set by a deep link so the Log screen knows which compose mode to open in.
     var pendingLogMode: DeepLink.LogMode?
@@ -44,6 +50,13 @@ final class AppEnvironment {
     }
 
     init() {
+        // UI tests get a memory-only store, for the reason given in `BannerDismissals`.
+        let dismissals = BannerDismissals(defaults: Self.isUITesting ? nil : .standard)
+        self.bannerDismissals = dismissals
+        self.dismissedBanners = Set(
+            dismissals.dismissed().compactMap(StorageBanner.Severity.init(rawValue:))
+        )
+
         if Self.isUITesting {
             self.stores = StoreBundle.inMemory()
             self.parser = StubNutritionParser()
@@ -83,6 +96,30 @@ final class AppEnvironment {
     init(previewStores: StoreBundle, parser: any NutritionParser = StubNutritionParser()) {
         self.stores = previewStores
         self.parser = parser
+        self.bannerDismissals = BannerDismissals(defaults: nil)
+    }
+
+    // MARK: Banners
+
+    /// The banner to show above the tabs, if there is one the user hasn't closed.
+    ///
+    /// The two severities are tracked separately: closing "the widget won't show your data"
+    /// must not pre-dismiss a later "entries are not being saved", which is a different and far
+    /// worse problem.
+    var visibleBanner: (detail: String, severity: StorageBanner.Severity)? {
+        if let startupError, !dismissedBanners.contains(.notSaving) {
+            return (startupError, .notSaving)
+        }
+        if let storageNotice, !dismissedBanners.contains(.widgetOnly) {
+            return (storageNotice, .widgetOnly)
+        }
+        return nil
+    }
+
+    /// Hides a banner until the app is updated — see ``BannerDismissals``.
+    func dismissBanner(_ severity: StorageBanner.Severity) {
+        dismissedBanners.insert(severity)
+        bannerDismissals.dismiss(severity.rawValue)
     }
 
     /// Applies a provider or model change from Settings.
