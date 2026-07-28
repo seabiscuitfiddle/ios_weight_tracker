@@ -7,6 +7,9 @@ import TallyCore
 struct HistoryScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: HistoryModel?
+    /// The entry being corrected, if any. The list is where mistakes are noticed, so it is also
+    /// where they get fixed.
+    @State private var editing: Entry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +30,9 @@ struct HistoryScreen: View {
             }
             model?.load()
             await model?.observeChanges()
+        }
+        .sheet(item: $editing) { entry in
+            EntryEditorSheet(entry: entry)
         }
     }
 
@@ -103,12 +109,12 @@ struct HistoryScreen: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
+                    // Tap to edit, rather than swipe to delete. `.swipeActions` was here and did
+                    // nothing at all: it is a `List` modifier, and these rows are a LazyVStack —
+                    // so the only way to remove an entry silently didn't exist.
                     ForEach(model.entries) { entry in
-                        EntryRow(entry: entry)
+                        EditableEntryRow(entry: entry) { editing = entry }
                             .padding(.horizontal, Metrics.gutter)
-                            .swipeActions(edge: .trailing) {
-                                Button("Delete", role: .destructive) { model.delete(entry) }
-                            }
                         TallyRule()
                     }
                 }

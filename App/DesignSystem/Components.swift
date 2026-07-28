@@ -128,6 +128,30 @@ struct EntryRow: View {
     }
 }
 
+/// An ``EntryRow`` that opens the editor when tapped.
+///
+/// The chevron is the only visual addition, and it earns its place: without it a row that reacts
+/// to a tap is indistinguishable from one that doesn't, and the way to correct a bad estimate
+/// stays invisible. The whole row is the target, not the glyph.
+struct EditableEntryRow: View {
+    let entry: Entry
+    let edit: () -> Void
+
+    var body: some View {
+        Button(action: edit) {
+            HStack(spacing: Metrics.space2) {
+                EntryRow(entry: entry)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.tallyTertiaryText)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Edit or delete this entry")
+    }
+}
+
 /// A screen header: accent kicker over a heavy title, with a heavy rule beneath.
 struct ScreenHeader<Trailing: View>: View {
     let kicker: String

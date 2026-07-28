@@ -60,6 +60,13 @@ public enum Metrics {
     public static let ringStroke: Double = 15
     /// Macro and progress bar height.
     public static let barHeight: Double = 8
+
+    /// Minimum edge of anything tappable — Apple's 44pt floor.
+    ///
+    /// The design's controls are small, flat glyphs, and a glyph is not a hit area. Sizing the
+    /// *frame* to this while the artwork stays small is what keeps the look without making
+    /// buttons that have to be aimed at.
+    public static let tapTarget: Double = 44
 }
 
 /// The type scale. Archivo throughout — 800 for numerals and headings, 600 for labels.

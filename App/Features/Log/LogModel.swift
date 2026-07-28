@@ -106,6 +106,15 @@ final class LogModel {
         }
     }
 
+    /// Re-reads the just-added cards, dropping any that have since gone.
+    ///
+    /// The entry editor writes through the store rather than through this model, so once it
+    /// closes these cards are the only copies left showing the numbers from before the edit.
+    func refreshJustAdded() {
+        justAdded = justAdded.compactMap { (try? stores.entries.entry(id: $0.id)) ?? nil }
+        load()
+    }
+
     private func source(for input: ParseInput, spoken: Bool) -> RecordSource {
         switch input {
         case .text: spoken ? .llmVoice : .llmText

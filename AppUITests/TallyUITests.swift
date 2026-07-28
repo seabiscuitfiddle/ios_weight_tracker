@@ -64,4 +64,44 @@ final class TallyUITests: XCTestCase {
 
         XCTAssertTrue(send.isEnabled, "Send should enable once there is text to log")
     }
+
+    /// Photo used to be a greyed-out label. The screen now claims it as a way to change the
+    /// draft, so it has to actually be a button someone can press.
+    @MainActor
+    func testPhotoIsAnEnabledButton() {
+        let app = launch()
+        app.buttons["tab.log"].tap()
+
+        let photo = app.buttons["log.photoButton"]
+        XCTAssertTrue(photo.waitForExistence(timeout: 5))
+        XCTAssertTrue(photo.isEnabled, "Photo should be pressable, not decoration")
+    }
+
+    /// The one thing a UI test can say about editing that a model test can't: that a logged
+    /// entry is reachable from the day's list at all.
+    @MainActor
+    func testALoggedEntryCanBeOpenedForEditing() {
+        let app = launch()
+        app.buttons["tab.log"].tap()
+
+        let field = app.textFields["log.composeField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("two eggs and toast")
+        app.buttons["log.sendButton"].tap()
+
+        // The stub parser returns immediately, so the card is there by the time History is up.
+        app.buttons["tab.history"].tap()
+
+        let row = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "Scrambled eggs")
+        ).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "The logged entry should be in the day's list")
+        row.tap()
+
+        XCTAssertTrue(
+            app.buttons["editor.deleteButton"].waitForExistence(timeout: 5),
+            "Tapping an entry should open the editor"
+        )
+    }
 }

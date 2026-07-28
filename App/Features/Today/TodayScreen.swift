@@ -6,6 +6,8 @@ import TallyCore
 struct TodayScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: TodayModel?
+    /// The entry being corrected, if any.
+    @State private var editing: Entry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +45,9 @@ struct TodayScreen: View {
             set: { environment.isShowingSettings = $0 }
         )) {
             SettingsScreen()
+        }
+        .sheet(item: $editing) { entry in
+            EntryEditorSheet(entry: entry)
         }
     }
 
@@ -170,11 +175,10 @@ struct TodayScreen: View {
                 action: { environment.selectedTab = .log }
             )
         } else {
+            // As on History: `.swipeActions` was here and was inert — it only does anything
+            // inside a `List`, and this is a `VStack` in a `ScrollView`.
             ForEach(Array(model.entries.enumerated()), id: \.element.id) { index, entry in
-                EntryRow(entry: entry)
-                    .swipeActions(edge: .trailing) {
-                        Button("Delete", role: .destructive) { model.delete(entry) }
-                    }
+                EditableEntryRow(entry: entry) { editing = entry }
                 if index < model.entries.count - 1 { TallyRule() }
             }
         }
