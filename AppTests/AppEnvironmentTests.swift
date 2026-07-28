@@ -263,3 +263,118 @@ struct LogModelTests {
         #expect(working.justAdded.allSatisfy { $0.source == .llmVoice })
     }
 }
+
+@MainActor
+@Suite("Entry editor")
+struct EntryEditorModelTests {
+    /// A day in the past, because the thing most likely to go wrong in an edit is the corrected
+    /// entry silently moving to today.
+    private static let pastDay = Day.today().adding(days: -9)
+
+    private static func logged(
+        rawInput: String? = "two eggs and toast",
+        label: String = "Scrambled eggs & toast"
+    ) -> Entry {
+        Entry(
+            kind: .food, label: label, calories: 340, proteinGrams: 18, fiberGrams: 3,
+            loggedAt: Date(timeIntervalSince1970: 1_700_000_000), day: pastDay,
+            source: .llmText, rawInput: rawInput
+        )
+    }
+
+    @Test("seeds the field with the words that produced the entry")
+    func seedsFromRawInput() {
+        let model = EntryEditorModel(
+            entry: Self.logged(), stores: .inMemory(), parser: StubNutritionParser()
+        )
+
+        #expect(model.text == "two eggs and toast")
+        // Nothing has been changed yet, so there is nothing to save.
+        #expect(model.canSave == false)
+    }
+
+    /// A photo entry is the one input with no words behind it, so the label has to stand in —
+    /// an empty box would make the commonest correction ("that was a large portion") impossible.
+    @Test("falls back to the label when the entry has no words")
+    func seedsFromLabelForPhotoEntries() {
+        let entry = Entry(
+            kind: .food, label: "Chicken bowl, avocado", calories: 640,
+            day: Self.pastDay, source: .llmPhoto, rawInput: nil
+        )
+        let model = EntryEditorModel(
+            entry: entry, stores: .inMemory(), parser: StubNutritionParser()
+        )
+
+        #expect(model.text == "Chicken bowl, avocado")
+    }
+
+    @Test("replaces the entry in place, keeping its id, day and time")
+    func savesInPlace() async throws {
+        let entry = Self.logged()
+        let stores = StoreBundle.inMemory(entries: [entry])
+        let model = EntryEditorModel(entry: entry, stores: stores, parser: StubNutritionParser())
+
+        model.text = "three eggs and two slices of toast"
+        #expect(model.canSave)
+        #expect(await model.save())
+
+        let onDay = try stores.entries.entries(on: Self.pastDay)
+        #expect(onDay.count == 1)
+        let updated = try #require(onDay.first)
+        #expect(updated.id == entry.id)
+        #expect(updated.day == entry.day)
+        #expect(updated.loggedAt == entry.loggedAt)
+        #expect(updated.rawInput == "three eggs and two slices of toast")
+        // Re-parsed by hand from text, whatever the entry started life as.
+        #expect(updated.source == .llmText)
+        // And it didn't land on today as a second meal.
+        #expect(try stores.entries.entries(on: Day.today()).isEmpty)
+    }
+
+    /// "Eggs" corrected to "eggs and a run" is two things. The first keeps the row's identity;
+    /// the rest join it on the same day rather than being dropped on the floor.
+    @Test("a description covering two things saves both onto the original day")
+    func savesExtraItemsAlongside() async throws {
+        let entry = Self.logged()
+        let stores = StoreBundle.inMemory(entries: [entry])
+        let parser = StubNutritionParser(result: ParseResult(items: [
+            ParsedItem(kind: .food, label: "Scrambled eggs", calories: 220),
+            ParsedItem(kind: .exercise, label: "Morning run", calories: 300,
+                       exerciseKind: .cardio, durationMinutes: 30),
+        ]))
+        let model = EntryEditorModel(entry: entry, stores: stores, parser: parser)
+
+        model.text = "two eggs and a half hour run"
+        #expect(await model.save())
+
+        let onDay = try stores.entries.entries(on: Self.pastDay)
+        #expect(onDay.count == 2)
+        #expect(onDay.contains { $0.id == entry.id })
+        #expect(onDay.allSatisfy { $0.day == Self.pastDay })
+    }
+
+    @Test("a parser failure leaves the entry exactly as it was")
+    func failedSaveChangesNothing() async throws {
+        let entry = Self.logged()
+        let stores = StoreBundle.inMemory(entries: [entry])
+        let parser = StubNutritionParser(error: NutritionParserError.overloaded)
+        let model = EntryEditorModel(entry: entry, stores: stores, parser: parser)
+
+        model.text = "something else entirely"
+        #expect(await model.save() == false)
+
+        #expect(model.errorMessage == NutritionParserError.overloaded.userMessage)
+        #expect(model.canRetry)
+        #expect(try stores.entries.entries(on: Self.pastDay) == [entry])
+    }
+
+    @Test("deleting removes the entry from its day")
+    func deletes() throws {
+        let entry = Self.logged()
+        let stores = StoreBundle.inMemory(entries: [entry])
+        let model = EntryEditorModel(entry: entry, stores: stores, parser: StubNutritionParser())
+
+        #expect(model.delete())
+        #expect(try stores.entries.entries(on: Self.pastDay).isEmpty)
+    }
+}

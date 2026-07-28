@@ -499,6 +499,11 @@ already inside your expenditure estimate.
 only the resulting text, and only if you send it. The transcript lands in the editable field first,
 which is what makes on-device accuracy acceptable.
 
+**Photo** capture takes the camera or the library, downscales to a 1024pt long edge and re-encodes
+as JPEG before sending. A full-resolution capture is several megabytes that no vision model reads
+at, and some providers reject the request outright. Whatever is typed in the field rides along as a
+note, so "half of this" and the picture go up as one entry.
+
 **Siri** works without opening the app: "log food in Tally", "how many calories do I have left in
 Tally", "log my weight in Tally". The logging phrase confirms with the number it recorded rather
 than just "done", so a bad estimate is noticeable while it's still easy to correct.
@@ -511,12 +516,11 @@ than just "done", so a bad estimate is noticeable while it's still easy to corre
 
 Still to do:
 
-- **Photo capture** in the Log screen. The parser already handles images end to end and is tested;
-  only the camera/library picker is missing, which is why the button is visible but disabled.
-- **Editing a logged entry's numbers.** Saved cards can be deleted but not corrected, which
-  undercuts the "estimates are editable" premise the design leans on.
 - **First-run onboarding**, rather than sending new users to Settings to find the fields the goal
   engine needs.
+- **"Open Settings" from a parse error** only works from the Today tab, because that is the one
+  screen presenting the Settings sheet. Hit the same error on Log or History and the button does
+  nothing.
 - **Visual polish against real screenshots** — see the warning above.
 
 `design/tally-design.html` is the source design, kept for reference. Open it in a browser to see
