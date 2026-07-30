@@ -8,9 +8,9 @@
 # │ VALUES YOU MUST SUPPLY BEFORE BUILDING ON A DEVICE — see README "What you must       │
 # │ fill in". None of them are needed for the simulator.                                 │
 # │                                                                                      │
-# │  1. BUNDLE_ID_PREFIX → a reverse-DNS prefix you control                              │
+# │  1. APP_BUNDLE_ID    → the app's bundle identifier, a reverse-DNS name you control   │
 # │  2. DEVELOPMENT_TEAM → your 10-character Apple Developer Team ID                     │
-# │  3. Register the App Group `group.<prefix>.tally` in the developer portal            │
+# │  3. Register the App Group `group.<APP_BUNDLE_ID>` in the developer portal           │
 # │                                                                                      │
 # │ Set 1 and 2 in a local `.env` — copy `.env.example` — NOT in this file. This file is │
 # │ public and an Apple Team ID identifies its owner. `./scripts/bootstrap.sh` loads     │
@@ -29,25 +29,45 @@ options:
   groupSortPosition: top
   generateEmptyDirectories: true
 
-# One prefix, referenced everywhere as ${BUNDLE_ID_PREFIX}: the app, the widget, the App Group
-# and the keychain group all derive from it, and they must agree.
+# One identifier, referenced everywhere as ${APP_BUNDLE_ID}: the widget, the test bundles, the
+# App Group, the keychain group and the deep-link scheme name all derive from it, and they must
+# agree.
+#
+# It is the app's *whole* bundle identifier, not a prefix. It was `BUNDLE_ID_PREFIX` with
+# `.tally` appended until it met App Store Connect, where the bundle ID on an app record is
+# permanent — so the project has to be able to produce whatever identifier that record was
+# created with, rather than only ever `<something>.tally`. The default below keeps every
+# generated identifier exactly what it was before the change.
 #
 # Two substitutions are in play and it is worth knowing which is which. XcodeGen replaces
 # ${VAR} at *generation* time when VAR is in the environment; anything it leaves alone is
 # expanded by Xcode at *build* time from the build settings defined here. That is why the
-# fallback below is a literal: with no .env, `xcodegen generate` leaves ${BUNDLE_ID_PREFIX}
-# in place and Xcode resolves it to com.example, so a fresh clone still builds.
+# fallback below is a literal: with no .env, `xcodegen generate` leaves ${APP_BUNDLE_ID}
+# in place and Xcode resolves it to com.example.tally, so a fresh clone still builds.
 settings:
   base:
-    # Overridden by BUNDLE_ID_PREFIX in your .env. Never put a real prefix here.
-    BUNDLE_ID_PREFIX: com.example
+    # Overridden by APP_BUNDLE_ID in your .env. Never put a real identifier here.
+    APP_BUNDLE_ID: com.example.tally
     # Empty is correct for the simulator, so no fallback is wanted: with no .env this expands
     # to nothing and the build is simply unsigned.
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
     # The single definition of the shared container, referenced by both entitlements files.
-    # The widget's own bundle identifier is <prefix>.tally.widget, but it must open the app's
+    # The widget's own bundle identifier is <APP_BUNDLE_ID>.widget, but it must open the app's
     # group, so this is spelled out once here rather than derived per-target.
-    APP_GROUP_ID: group.${BUNDLE_ID_PREFIX}.tally
+    #
+    # `group.` + the app's bundle ID is not an arbitrary convention: TallyDatabase derives the
+    # same string at runtime from Bundle.main, so this and the code cannot drift.
+    APP_GROUP_ID: group.${APP_BUNDLE_ID}
+    # Version and build number, referenced from both `info:` blocks below rather than left to
+    # XcodeGen's defaults — those are the literals "1.0" and "1", which App Store Connect rejects
+    # on the second upload because the build number never changes. The TestFlight workflow
+    # overrides CURRENT_PROJECT_VERSION with the run number; MARKETING_VERSION is bumped by hand
+    # when the release is worth a new number.
+    #
+    # The app and the widget must agree on both values. They do because both read these, and a
+    # mismatch is an upload-time rejection ("bundle version does not match").
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     # Warnings-as-errors is off deliberately: a warning should not stop someone building the
     # app to try it, and CI checks the same code with its own stricter settings.
@@ -83,7 +103,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Tally
-        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally
+        PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}
         INFOPLIST_KEY_CFBundleDisplayName: Tally
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         # Portrait only. Every screen in the design is a single portrait column, and a
@@ -91,6 +111,15 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         CODE_SIGN_ENTITLEMENTS: App/Tally.entitlements
         ENABLE_PREVIEWS: YES
+        # Manual signing, for the TestFlight workflow only. This is the one setting that cannot
+        # go on the xcodebuild command line: the app and the widget need *different* profiles,
+        # and a command-line build setting applies to every target at once.
+        #
+        # Empty everywhere else, by the same mechanism as DEVELOPMENT_TEAM above — with no env
+        # var set, XcodeGen leaves the ${...} alone and Xcode resolves it to nothing, so opening
+        # the project on a Mac still uses automatic signing. The workflow reads the profile's
+        # name out of the profile itself, so this never has to be written down anywhere.
+        PROVISIONING_PROFILE_SPECIFIER: ${APP_PROVISIONING_PROFILE}
         # App/Resources/Assets.xcassets. Regenerate the artwork with scripts/render-icon.swift.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
@@ -100,10 +129,15 @@ targets:
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
 
+        # Build-setting references, not literals, so CI can override the build number without
+        # editing a tracked file. See MARKETING_VERSION in `settings:` above.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+
         # Opens the widget's quick-log buttons. Must match DeepLink.scheme in TallyCore —
         # changing one without the other breaks every button with no error.
         CFBundleURLTypes:
-          - CFBundleURLName: ${BUNDLE_ID_PREFIX}.tally.deeplink
+          - CFBundleURLName: ${APP_BUNDLE_ID}.deeplink
             CFBundleURLSchemes: [tally]
 
         # Permission strings. iOS terminates the app on first use of a capability whose
@@ -143,13 +177,21 @@ targets:
     settings:
       base:
         PRODUCT_NAME: TallyWidget
-        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally.widget
+        PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}.widget
         CODE_SIGN_ENTITLEMENTS: Widget/TallyWidget.entitlements
         ENABLE_PREVIEWS: YES
+        # The widget's own App Store profile — see the note on TallyApp. An extension is signed
+        # separately from its host and needs its own App ID; reusing the app's profile here is
+        # the mistake that produces "provisioning profile does not match bundle identifier".
+        PROVISIONING_PROFILE_SPECIFIER: ${WIDGET_PROVISIONING_PROFILE}
     info:
       path: Widget/Info.plist
       properties:
         CFBundleDisplayName: Tally
+        # Must match the app's, exactly. App Store Connect rejects an upload whose extension
+        # disagrees with its host on either value.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
@@ -165,7 +207,7 @@ targets:
         product: TallyCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}.tests
         GENERATE_INFOPLIST_FILE: YES
         # Spelled out because the app sets PRODUCT_NAME to "Tally" while its target is named
         # "TallyApp", and the generated default points at TallyApp.app/TallyApp — a path that
@@ -182,7 +224,7 @@ targets:
       - target: TallyApp
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID_PREFIX}.tally.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}.uitests
         GENERATE_INFOPLIST_FILE: YES
         # UI tests drive the app from outside, so they need the target's name rather than a
         # host binary path.

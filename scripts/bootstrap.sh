@@ -79,7 +79,7 @@ fi
 
 step "Loading configuration"
 
-# Must happen before xcodegen: XcodeGen substitutes ${DEVELOPMENT_TEAM} and ${BUNDLE_ID_PREFIX}
+# Must happen before xcodegen: XcodeGen substitutes ${DEVELOPMENT_TEAM} and ${APP_BUNDLE_ID}
 # from the environment as it generates, which is how account-specific values reach the build
 # without ever being written to a tracked file.
 # shellcheck source=scripts/load-env.sh
@@ -125,16 +125,16 @@ fi
 
 step "Checking configuration"
 
-# Reported from the environment, which is where these now come from. The fallback prefix is
+# Reported from the environment, which is where these now come from. The fallback identifier is
 # project.yml's own build setting, so it is read from there rather than assumed.
-prefix=${BUNDLE_ID_PREFIX:-$(grep -E '^\s*BUNDLE_ID_PREFIX:' project.yml | head -1 | sed 's/.*: *//' | tr -d '"')}
+bundle_id=${APP_BUNDLE_ID:-$(grep -E '^\s*APP_BUNDLE_ID:' project.yml | head -1 | sed 's/.*: *//' | tr -d '"')}
 team=${DEVELOPMENT_TEAM:-}
 
-if [ "$prefix" = "com.example" ]; then
-    note "Bundle prefix is still the placeholder '$prefix'. Fine for the simulator. To run on a
-    device, set BUNDLE_ID_PREFIX in .env to something you own, then re-run this script."
+if [ "$bundle_id" = "com.example.tally" ]; then
+    note "Bundle identifier is still the placeholder '$bundle_id'. Fine for the simulator. To run
+    on a device, set APP_BUNDLE_ID in .env to something you own, then re-run this script."
 else
-    ok "Bundle prefix: $prefix"
+    ok "Bundle identifier: $bundle_id"
 fi
 
 if [ -z "$team" ]; then
@@ -145,8 +145,8 @@ else
     ok "Development team: ${team:0:4}••••••"
 fi
 
-if [ -n "${BUNDLE_ID_PREFIX:-}" ] || [ -n "$team" ]; then
-    note "Register the App Group 'group.$prefix.tally' in the developer portal and enable App
+if [ -n "${APP_BUNDLE_ID:-}" ] || [ -n "$team" ]; then
+    note "Register the App Group 'group.$bundle_id' in the developer portal and enable App
     Groups on both targets, or the widget silently gets its own empty container."
 fi
 

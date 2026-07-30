@@ -1,0 +1,330 @@
+name: TestFlight
+
+# Archives Tally for a real device, signs it with your Apple Distribution certificate, and
+# uploads it to App Store Connect. From there it appears in TestFlight and installs on your
+# phone from the TestFlight app — no cable, no UDID list, no Mac.
+#
+# THIS IS THE ONLY WORKFLOW THAT NEEDS SECRETS. ci.yml stays credential-free and keeps working
+# on forks; nothing here runs on a pull request, so a fork can never reach these values.
+#
+# Required repository secrets — see README, "Shipping to TestFlight":
+#
+#   APP_BUNDLE_ID                        the app's bundle ID; must equal the one on the App
+#                                        Store Connect record, which cannot be changed later
+#   DEVELOPMENT_TEAM                     10-character Apple Team ID
+#   IOS_P12_BASE64                       Apple Distribution certificate + private key, .p12, base64
+#   IOS_P12_PASSWORD                     password set when exporting that .p12
+#   IOS_PROVISION_PROFILE_BASE64         App Store profile for <APP_BUNDLE_ID>, base64
+#   IOS_WIDGET_PROVISION_PROFILE_BASE64  App Store profile for <APP_BUNDLE_ID>.widget, base64
+#   APP_STORE_CONNECT_KEY_ID             App Store Connect API key ID
+#   APP_STORE_CONNECT_ISSUER_ID          issuer ID for that key
+#   APP_STORE_CONNECT_PRIVATE_KEY        contents of the AuthKey_*.p8, pasted whole
+#
+# Base64 a file with:  base64 -w0 file        (Linux)
+#                      base64 -i file         (macOS)
+
+on:
+  # Manual by default. Uploading a build is not something that should happen because a commit
+  # landed: every upload burns a build number and mails your testers.
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  # Never two uploads at once — they would race for the same build number.
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    name: Build and upload
+    runs-on: macos-15
+    # A fork has none of these secrets, and a run there would fail confusingly halfway through.
+    if: github.repository == 'seabiscuitfiddle/ios_weight_tracker'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        # Same reasoning as ci.yml: no xcode-select. The runner's default Xcode is the supported one.
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      # Signing identity.
+      #
+      # Into a throwaway keychain in $RUNNER_TEMP, never the login keychain, and with a random
+      # password rather than an empty one. The empty-password version of this that circulates
+      # works, but it also leaves an unlocked, world-readable keychain behind on a runner you
+      # do not control the lifetime of.
+      - name: Install signing certificate
+        env:
+          P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          keychain="$RUNNER_TEMP/tally-signing.keychain-db"
+          password=$(openssl rand -base64 24)
+          echo "::add-mask::$password"
+
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+
+          security create-keychain -p "$password" "$keychain"
+          # Without this the keychain re-locks after five minutes of idle and the archive fails
+          # partway through with "User interaction is not allowed".
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$keychain" -P "$P12_PASSWORD" -f pkcs12 \
+            -T /usr/bin/codesign -T /usr/bin/security
+
+          # Grants codesign access to the private key without a UI prompt. Skipping this is the
+          # single most common cause of a CI build hanging until it times out.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+
+          # Prepend to the search list rather than replacing it with `default-keychain -s`.
+          # Replacing it drops the system roots, and the certificate then fails to validate
+          # with a chain error that points nowhere near the real cause.
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+          # Sign by hash rather than by name: "Apple Distribution" and the older
+          # "iPhone Distribution" are both valid here and only one of them will match.
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | awk '/[0-9A-F]{40}/ {print $2; exit}')
+          if [ -z "$identity" ]; then
+            echo "::error::No code-signing identity in the .p12. IOS_P12_BASE64 must hold an" \
+                 "Apple Distribution certificate *with* its private key (export it from" \
+                 "Keychain Access as a .p12, not a .cer)."
+            exit 1
+          fi
+
+          echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      # Provisioning profiles.
+      #
+      # Both of them: TallyWidget is an embedded app extension with its own bundle identifier,
+      # so it is signed separately and needs its own App ID and profile. One profile builds the
+      # app and then fails on the widget.
+      #
+      # The profile name and bundle identifier are read back out of each profile rather than
+      # configured as more secrets. Two fewer things to keep in sync, and renaming a profile in
+      # the developer portal can no longer silently break the build.
+      - name: Install provisioning profiles
+        env:
+          APP_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          WIDGET_PROFILE_BASE64: ${{ secrets.IOS_WIDGET_PROVISION_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          destination="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$destination"
+
+          install_profile() {
+            local base64_value=$1 role=$2 name_var=$3 bundle_var=$4
+            local raw="$RUNNER_TEMP/$role.mobileprovision"
+            local decoded="$RUNNER_TEMP/$role.plist"
+
+            if [ -z "$base64_value" ]; then
+              echo "::error::No $role provisioning profile. See the secret list at the top of" \
+                   "this workflow."
+              exit 1
+            fi
+
+            echo "$base64_value" | base64 --decode > "$raw"
+            # A .mobileprovision is a CMS-signed plist, not a plist. -D unwraps it.
+            security cms -D -i "$raw" > "$decoded"
+
+            local name uuid app_id bundle_id expires
+            name=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$decoded")
+            uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$decoded")
+            expires=$(/usr/libexec/PlistBuddy -c 'Print :ExpirationDate' "$decoded")
+            app_id=$(/usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:application-identifier' "$decoded")
+            # application-identifier is TEAMID.bundle.id — drop the team prefix.
+            bundle_id=${app_id#*.}
+
+            # The Team ID is not a password, but this repository deliberately keeps it out of
+            # public places, and a workflow log is one. Mask it before it can be echoed.
+            echo "::add-mask::${app_id%%.*}"
+
+            # An App Store profile has no ProvisionedDevices key. An ad-hoc one does, and would
+            # produce a build that App Store Connect rejects after the upload has finished —
+            # slow, and the rejection email does not say why.
+            if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$decoded" >/dev/null 2>&1; then
+              echo "::error::The $role profile is ad-hoc (it lists specific devices)." \
+                   "TestFlight needs an *App Store* distribution profile."
+              exit 1
+            fi
+
+            cp "$raw" "$destination/$uuid.mobileprovision"
+            echo "  $role: '$name' → $bundle_id (expires $expires)"
+
+            echo "$name_var=$name" >> "$GITHUB_ENV"
+            echo "$bundle_var=$bundle_id" >> "$GITHUB_ENV"
+            rm -f "$raw" "$decoded"
+          }
+
+          # PROFILE_* to keep these distinct from APP_BUNDLE_ID, which is the identifier the
+          # *project* is configured to build. Comparing the two is the check below.
+          install_profile "$APP_PROFILE_BASE64" app \
+            APP_PROVISIONING_PROFILE PROFILE_APP_BUNDLE_ID
+          install_profile "$WIDGET_PROFILE_BASE64" widget \
+            WIDGET_PROVISIONING_PROFILE PROFILE_WIDGET_BUNDLE_ID
+
+      # ────────────────────────────────────────────────────────────────────────────────────
+      - name: Generate project
+        env:
+          APP_BUNDLE_ID: ${{ secrets.APP_BUNDLE_ID }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          # Consumed by the PROVISIONING_PROFILE_SPECIFIER references in project.yml. XcodeGen
+          # substitutes them at generation time, per target — which the xcodebuild command line
+          # cannot do, since a setting there applies to every target at once.
+          APP_PROVISIONING_PROFILE: ${{ env.APP_PROVISIONING_PROFILE }}
+          WIDGET_PROVISIONING_PROFILE: ${{ env.WIDGET_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_BUNDLE_ID}" ]; then
+            echo "::error::APP_BUNDLE_ID is not set. Unlike ci.yml, this workflow cannot fall" \
+                 "back to com.example.tally — a signed build has to match both the App ID in" \
+                 "your provisioning profile and the bundle ID on the App Store Connect record."
+            exit 1
+          fi
+          if [ -z "${DEVELOPMENT_TEAM}" ]; then
+            echo "::error::DEVELOPMENT_TEAM is not set."
+            exit 1
+          fi
+
+          xcodegen generate
+
+          # Catch an identifier mismatch here, in one legible message, rather than as a signing
+          # error 400 lines into an xcodebuild log. This is the failure that actually happens:
+          # the App ID registered in the portal and the one the project builds drift apart, and
+          # nothing says so until codesign runs.
+          expected_widget="${APP_BUNDLE_ID}.widget"
+          fail=0
+          if [ "$APP_BUNDLE_ID" != "$PROFILE_APP_BUNDLE_ID" ]; then
+            echo "::error::The app profile is for '$PROFILE_APP_BUNDLE_ID', but this project" \
+                 "builds '$APP_BUNDLE_ID'. Fix the APP_BUNDLE_ID secret, or register an App ID" \
+                 "for '$APP_BUNDLE_ID' and make a profile for it."
+            fail=1
+          fi
+          if [ "$expected_widget" != "$PROFILE_WIDGET_BUNDLE_ID" ]; then
+            echo "::error::The widget profile is for '$PROFILE_WIDGET_BUNDLE_ID', but this" \
+                 "project builds '$expected_widget'."
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Archive
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project Tally.xcodeproj \
+            -scheme TallyApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Tally.xcarchive" \
+            -skipPackagePluginValidation \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            | xcbeautify --renderer github-actions
+
+      - name: Export IPA
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: |
+          set -euo pipefail
+
+          # Written here rather than committed: it has to name the team and both bundle
+          # identifiers, and those are the values this repository keeps out of tracked files.
+          #
+          # The heredoc body is flat, and must stay flat. YAML's `|` strips only the block's
+          # common indentation, so any *extra* indentation on the first line would survive into
+          # the file — and an XML declaration is only valid at the very first byte of a
+          # document. The failure is xcodebuild rejecting the plist, which reads like a bad
+          # option rather than a whitespace problem.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          <key>method</key><string>app-store-connect</string>
+          <key>destination</key><string>export</string>
+          <key>teamID</key><string>${DEVELOPMENT_TEAM}</string>
+          <key>signingStyle</key><string>manual</string>
+          <key>uploadSymbols</key><true/>
+          <key>provisioningProfiles</key>
+          <dict>
+          <key>${PROFILE_APP_BUNDLE_ID}</key><string>${APP_PROVISIONING_PROFILE}</string>
+          <key>${PROFILE_WIDGET_BUNDLE_ID}</key><string>${WIDGET_PROVISIONING_PROFILE}</string>
+          </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Tally.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            | xcbeautify --renderer github-actions
+
+      - name: Upload to App Store Connect
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # altool finds the key by filename, in one of a few fixed directories. It cannot be
+          # pointed at an arbitrary path, so the name matters exactly.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s\n' "$PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
+
+          # -maxdepth before the expression: BSD find, unlike GNU, requires options first.
+          ipa=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
+          echo "Uploading $(basename "$ipa") as build ${{ github.run_number }}"
+
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$ipa" \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
+
+          rm -rf "$HOME/.appstoreconnect/private_keys"
+
+      - name: Upload IPA artifact
+        # Kept even on success: if App Store Connect rejects the build during processing, this
+        # is the exact binary it rejected, and it can be inspected without rebuilding.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tally-${{ github.run_number }}.ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Clean up keychain
+        # `always()`, because a failed run leaves the private key sitting on the runner
+        # otherwise. GitHub reclaims the VM, but not promptly and not verifiably.
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/tally-signing.keychain-db" 2>/dev/null || true
+          rm -rf "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                 "$HOME/.appstoreconnect/private_keys"

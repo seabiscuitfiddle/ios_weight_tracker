@@ -45,7 +45,10 @@ for path in $files; do
                 "Local configuration must stay out of version control." \
                 "Fix: git rm --cached $path"
             ;;
-        *.p12|*.p8|*.mobileprovision|Secrets.xcconfig)
+        # *.b64 is here because base64-ing a profile or a .p12 to paste into a GitHub secret
+        # produces a file the other patterns miss — profile.mobileprovision.b64 is not
+        # *.mobileprovision — while containing exactly the same Team ID and device UDIDs.
+        *.p12|*.p8|*.mobileprovision|*.b64|Secrets.xcconfig)
             report "$path is tracked" \
                 "Signing material never belongs in the repository." \
                 "Fix: git rm --cached $path"

@@ -30,6 +30,7 @@ makes even that one call unnecessary.
 - [Architecture](#architecture)
 - [Keeping this repository publishable](#keeping-this-repository-publishable)
 - [GitHub Actions secrets](#github-actions-secrets)
+- [Shipping to TestFlight](#shipping-to-testflight) — installing on a phone without a Mac
 - [Project status](#project-status)
 - [License](#license)
 
@@ -51,7 +52,7 @@ xed Tally.xcodeproj            # then ⌘R
 ```
 
 **On the simulator that is genuinely all of it.** No Apple Developer account, no team ID, no
-App Group registration, no API key. The placeholder bundle prefix is fine, because a simulator
+App Group registration, no API key. The placeholder bundle identifier is fine, because a simulator
 build isn't signed against a real identity.
 
 `bootstrap.sh` is safe to re-run, and re-run it after adding or removing source files — the
@@ -121,7 +122,8 @@ database could be opened at all.
 Two values and one registration. Both values go in `.env` — `cp .env.example .env` — and not into
 any tracked file: this repository is public, and a Team ID identifies your developer account.
 
-1. **`BUNDLE_ID_PREFIX`** — change the `com.example` placeholder to something you own.
+1. **`APP_BUNDLE_ID`** — change the `com.example.tally` placeholder to something you own.
+   This is the app's whole bundle identifier; nothing is appended to it.
 
    This is deliberately a single edit. The bundle IDs, both entitlements files, the App Group, and
    the keychain group all derive from it, and the runtime code derives the App Group from the
@@ -130,7 +132,7 @@ any tracked file: this repository is public, and a Team ID identifies your devel
 2. **`DEVELOPMENT_TEAM`** — your 10-character Team ID, from Xcode › Settings › Accounts, or the
    Membership page of the developer portal.
 
-3. **Register the App Group** `group.<your-prefix>.tally` in the developer portal, and enable the
+3. **Register the App Group** `group.<your-bundle-id>` in the developer portal, and enable the
    App Groups capability on **both** the app and widget targets.
 
 Then `./scripts/bootstrap.sh` again, and Run with your device selected.
@@ -163,7 +165,7 @@ cp .env.example .env      # then fill it in
 
 | Value | What it is | If you skip it |
 |---|---|---|
-| `BUNDLE_ID_PREFIX` | A reverse-DNS prefix you own, e.g. `dev.yourname`. Targets become `<prefix>.tally` and `<prefix>.tally.widget`. | Simulator builds work. On a device, the placeholder `com.example` may already be taken, and provisioning fails. |
+| `APP_BUNDLE_ID` | The app's bundle identifier, a reverse-DNS name you own, e.g. `dev.yourname.tally`. The widget becomes `<APP_BUNDLE_ID>.widget`. Nothing is appended to the value you give. | Simulator builds work. On a device, the placeholder `com.example.tally` may already be taken, and provisioning fails. |
 | `DEVELOPMENT_TEAM` | Your 10-character Apple Developer Team ID, from Xcode › Settings › Accounts. | Simulator builds work. Installing on a device fails to sign. |
 
 How they reach the build is worth one paragraph, because two different substitutions are
@@ -173,7 +175,7 @@ which is the normal case — is expanded by **Xcode** at build time from the pla
 in `project.yml`. That is why a fresh clone with no configuration at all still builds and runs on
 the simulator as `com.example.tally`.
 
-**`BUNDLE_ID_PREFIX` is a single edit.** Everything derived from it follows automatically:
+**`APP_BUNDLE_ID` is a single edit.** Everything derived from it follows automatically:
 
 - Bundle identifiers, via `project.yml`
 - The App Group in both entitlements files, via the `$(APP_GROUP_ID)` build setting — defined
@@ -188,7 +190,7 @@ places, and missing one produced no build error — just a widget that never sho
 
 ### The App Group, which is the one people get half-right
 
-You still have to **register** `group.<your-prefix>.tally` in the developer portal and enable the
+You still have to **register** `group.<your-bundle-id>` in the developer portal and enable the
 App Groups capability on **both** targets. A mismatch, or enabling it on only one, fails silently at
 runtime rather than at build time.
 
@@ -416,7 +418,7 @@ Everything account-specific is kept out of tracked files by construction rather 
 
 | Where it lives | What it holds | Why not in the repo |
 |---|---|---|
-| `.env`, gitignored | `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | An Apple Team ID identifies its owner. Template: `.env.example`. |
+| `.env`, gitignored | `APP_BUNDLE_ID`, `DEVELOPMENT_TEAM` | An Apple Team ID identifies its owner. Template: `.env.example`. |
 | GitHub repository secrets | The same two, optional | Only needed if you add a job that signs for a device. |
 | The device keychain | Your API keys, one item per provider, keyed by provider id | Entered in Settings at runtime. There is no build-time key for any provider, so no binary can leak one, and no provider can be sent a key minted for another. |
 
@@ -454,8 +456,15 @@ Optional, only if you want the extra capability:
 
 | Secret | Enables | Notes |
 |---|---|---|
-| `BUNDLE_ID_PREFIX`, `DEVELOPMENT_TEAM` | Generating the project with your own identifiers, for a job that builds or signs for a device. | Both are read by the "Generate project" step. Absent — the normal case, and always on forks — the placeholders in `project.yml` are used instead. |
-| `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY` | TestFlight / App Store distribution. | Not used by the current workflow. Only add these if you add a release job. |
+| `APP_BUNDLE_ID`, `DEVELOPMENT_TEAM` | Generating the project with your own identifiers, for a job that builds or signs for a device. | Both are read by the "Generate project" step. Absent — the normal case, and always on forks — the placeholders in `project.yml` are used instead. |
+| `IOS_P12_BASE64`, `IOS_P12_PASSWORD` | Signing a device build. | The Apple Distribution certificate **and its private key**, exported from Keychain Access as a `.p12`. A `.cer` alone is not enough — it has no key, and the build fails with "no code-signing identity". |
+| `IOS_PROVISION_PROFILE_BASE64`, `IOS_WIDGET_PROVISION_PROFILE_BASE64` | Signing the app and the widget. | Two, not one. `TallyWidget` is an embedded extension with its own bundle identifier, so it needs its own App ID and its own profile. |
+| `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY` | Uploading to TestFlight / App Store. | Used by `testflight.yml`. The private key is the whole contents of the `AuthKey_*.p8`, pasted in. |
+
+Everything from `IOS_P12_BASE64` down is used only by
+[`testflight.yml`](.github/workflows/testflight.yml) — see
+[Shipping to TestFlight](#shipping-to-testflight). `ci.yml` never reads them and stays
+credential-free.
 
 Do not add secrets you don't need. **There is no API key secret, for any provider, and nothing
 here needs one.** Tally reads keys from the device Keychain at runtime, so baking one in would
@@ -464,7 +473,90 @@ rather than against a live endpoint, which is faster, free, and works on forks.
 
 ---
 
-## Project status
+## Shipping to TestFlight
+
+[`.github/workflows/testflight.yml`](.github/workflows/testflight.yml) archives Tally on a macOS
+runner, signs it, and uploads it to App Store Connect. The build then installs on your phone from
+the TestFlight app.
+
+**This is the path to use if you don't own a Mac.** The alternative for a paid account is an
+ad-hoc build, and an ad-hoc `.ipa` has no install route that doesn't involve either a Mac
+(Apple Configurator, Xcode's Devices window) or hosting the signed binary somewhere your phone
+can reach over HTTPS. TestFlight needs neither, and it also skips registering device UDIDs.
+
+The workflow is `workflow_dispatch` plus tags matching `v*`. It deliberately does not run on
+every push: each upload consumes a build number and notifies your testers.
+
+### One-time setup
+
+**1. Register the identifiers.** In the developer portal, with `<id>` being whatever you set
+`APP_BUNDLE_ID` to:
+
+| Kind | Identifier | Capabilities |
+|---|---|---|
+| App ID | `<id>` | App Groups, HealthKit |
+| App ID | `<id>.widget` | App Groups |
+| App Group | `group.<id>` | — |
+
+Then enable the App Group on both App IDs and select `group.<id>` for each. The widget
+is a separate App ID because an app extension is signed separately from its host; this is the
+step people skip, and it fails at the very end of the build.
+
+**2. Export the signing certificate.** An **Apple Distribution** certificate, from Keychain
+Access → right-click → Export → `.p12`, with a password. Export the certificate *with its private
+key* — a `.cer` on its own cannot sign anything.
+
+**3. Create two App Store provisioning profiles**, one per App ID above. Not ad-hoc: the workflow
+checks and stops with an explanation if it finds a profile with a device list, because an ad-hoc
+build is only rejected by App Store Connect after the upload has already finished.
+
+**4. Create an App Store Connect API key** — Users and Access → Integrations → App Store Connect
+API, role **App Manager**. Download the `.p8`; it can only be downloaded once. Note the Key ID
+and the Issuer ID.
+
+**5. Create the app record** in App Store Connect with bundle ID `<id>`, so the upload has
+somewhere to land.
+
+> **The bundle ID on an app record is permanent.** App Store Connect will not let you edit it
+> afterwards — the only remedy is deleting the record, which is possible only while it has no
+> builds. If a record already exists, set `APP_BUNDLE_ID` to match *it*, rather than choosing a
+> new identifier and expecting the record to follow. This is why `APP_BUNDLE_ID` is the whole
+> identifier and not a prefix with `.tally` appended: the project has to be able to produce
+> whatever the record was created with.
+
+**6. Add the repository secrets** listed in
+[GitHub Actions secrets](#github-actions-secrets). Base64 the two binary files first:
+
+```sh
+base64 -w0 ios_distribution.p12          # Linux    (macOS: base64 -i)
+base64 -w0 TallyApp_AppStore.mobileprovision
+```
+
+Paste the `.p8` in as-is, `-----BEGIN PRIVATE KEY-----` line and all.
+
+### What the workflow works out for itself
+
+Only what it cannot derive is a secret. The profile **names** and the **bundle identifiers** are
+read back out of the profiles at build time with `security cms -D`, so renaming a profile in the
+portal cannot silently break the build, and there are two fewer values to keep in sync.
+
+It also fails early and legibly on the mismatch that actually happens in practice: if the App ID
+in a profile disagrees with what `APP_BUNDLE_ID` produces, the "Generate project" step says so
+by name, rather than leaving you to find it in a codesign error several hundred log lines later.
+
+### Build numbers
+
+`CURRENT_PROJECT_VERSION` is overridden with the GitHub Actions run number, so every upload gets
+a distinct, increasing build. App Store Connect rejects a repeat. `MARKETING_VERSION` — the
+version users see — is in `project.yml` and is bumped by hand.
+
+### Getting it on your phone
+
+Once the upload finishes, processing takes a few minutes. Then, in App Store Connect →
+TestFlight, add yourself as an **internal tester** (this needs no Beta App Review). Install
+Apple's TestFlight app on the phone, sign in with the same Apple ID, and the build is there.
+
+Subsequent builds arrive automatically — one workflow run, no cable, no Mac.
 
 | Phase | State |
 |---|---|

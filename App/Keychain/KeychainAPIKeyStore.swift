@@ -30,7 +30,7 @@ public struct KeychainAPIKeyStore: APIKeyStore {
 
     /// The store for one provider.
     ///
-    /// Keyed off the running bundle, so changing `BUNDLE_ID_PREFIX` doesn't silently orphan a
+    /// Keyed off the running bundle, so changing `APP_BUNDLE_ID` doesn't silently orphan a
     /// previously stored key under a service name nothing looks up any more. The provider id is
     /// the *account*, so all of them live under one service and can be enumerated.
     public static func forCurrentBundle(
