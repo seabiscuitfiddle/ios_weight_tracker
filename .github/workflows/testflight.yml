@@ -38,7 +38,13 @@ concurrency:
 jobs:
   testflight:
     name: Build and upload
-    runs-on: macos-15
+    # macos-26, not macos-15, for the SDK: App Store Connect requires apps to be built with the
+    # iOS 26 SDK or later, and macos-15's *default* Xcode is 16.4, which has iOS 18.5. The
+    # rejection happens after the archive, the export and the upload have all succeeded —
+    # "SDK version issue... must be built with the iOS 26 SDK or later" — so nothing earlier in
+    # this workflow hints at it. macos-26 defaults to Xcode 26.5, which keeps the no-xcode-select
+    # rule below intact. Apple raises this floor about once a year; the fix is a newer image.
+    runs-on: macos-26
     # A fork has none of these secrets, and a run there would fail confusingly halfway through.
     if: github.repository == 'seabiscuitfiddle/ios_weight_tracker'
 
@@ -47,7 +53,22 @@ jobs:
 
       - name: Show toolchain
         # Same reasoning as ci.yml: no xcode-select. The runner's default Xcode is the supported one.
-        run: xcodebuild -version
+        #
+        # The SDK check is here rather than left to the upload because the upload is the last step:
+        # an SDK too old for App Store Connect otherwise costs a full archive, export and upload
+        # before anything says so, and the rejection arrives among unrelated validation errors.
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+
+          sdk=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK: $sdk"
+          if [ "${sdk%%.*}" -lt 26 ]; then
+            echo "::error::This runner's default Xcode has the iOS $sdk SDK. App Store Connect" \
+                 "rejects anything built with less than iOS 26. Move the job to a newer" \
+                 "runner image (see runs-on above) rather than xcode-select'ing a newer Xcode."
+            exit 1
+          fi
 
       - name: Install XcodeGen
         run: brew install xcodegen
