@@ -35,3 +35,9 @@ Widget/Info.plist
 *.p12
 *.mobileprovision
 Secrets.xcconfig
+
+# The base64 of any of the above, which is what you paste into a GitHub secret. Same bytes,
+# same Team ID and device UDIDs inside, but `*.mobileprovision` does not match
+# `profile.mobileprovision.b64` — so the encoded copy was the one that could still be
+# committed by accident.
+*.b64

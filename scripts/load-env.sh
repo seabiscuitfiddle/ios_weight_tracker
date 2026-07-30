@@ -52,8 +52,8 @@ unset _env_file
 # just makes the empty case explicit instead of accidental.
 export DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}"
 
-# Deliberately not defaulted here. project.yml's own BUNDLE_ID_PREFIX build setting is the
-# fallback (com.example), and setting an empty one here would override it with nothing.
-if [ -n "${BUNDLE_ID_PREFIX:-}" ]; then
-    export BUNDLE_ID_PREFIX
+# Deliberately not defaulted here. project.yml's own APP_BUNDLE_ID build setting is the
+# fallback (com.example.tally), and setting an empty one here would override it with nothing.
+if [ -n "${APP_BUNDLE_ID:-}" ]; then
+    export APP_BUNDLE_ID
 fi

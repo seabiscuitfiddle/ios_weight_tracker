@@ -112,15 +112,15 @@ jobs:
         # project.yml's placeholders in place and the simulator build below signs nothing. Set
         # them only if you add a job that builds for a device.
         env:
-          BUNDLE_ID_PREFIX: ${{ secrets.BUNDLE_ID_PREFIX }}
+          APP_BUNDLE_ID: ${{ secrets.APP_BUNDLE_ID }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
         run: |
           # An unset secret arrives as the empty string, which would override project.yml's
           # placeholder with nothing, so it is unexported rather than passed through empty.
           # Written as an `if` because steps run under `bash -e`, where a false `&&` chain is
           # itself a step failure.
-          if [ -z "${BUNDLE_ID_PREFIX}" ]; then
-            unset BUNDLE_ID_PREFIX
+          if [ -z "${APP_BUNDLE_ID}" ]; then
+            unset APP_BUNDLE_ID
           fi
           xcodegen generate
 

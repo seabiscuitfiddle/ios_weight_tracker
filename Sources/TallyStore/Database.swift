@@ -18,11 +18,11 @@ public enum TallyDatabase {
     /// The App Group whose container holds the shared database.
     ///
     /// **Derived from the bundle identifier rather than hardcoded**, so changing
-    /// `BUNDLE_ID_PREFIX` in `project.yml` updates this too. The alternative — a literal string
+    /// `APP_BUNDLE_ID` in `project.yml` updates this too. The alternative — a literal string
     /// here — meant anyone building with their own team had to find and edit the same value in
     /// five places, and missing one produces no build error, just a widget that never shows data.
     ///
-    /// The app is `<prefix>.tally` and the widget `<prefix>.tally.widget`, so stripping a
+    /// The app is `<APP_BUNDLE_ID>` and the widget `<APP_BUNDLE_ID>.widget`, so stripping a
     /// `.widget` suffix gives both processes the same answer.
     public static func appGroupIdentifier(for bundle: Bundle = .main) -> String {
         appGroupIdentifier(forBundleIdentifier: bundle.bundleIdentifier)

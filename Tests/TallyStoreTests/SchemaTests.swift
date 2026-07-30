@@ -10,7 +10,7 @@ struct SchemaTests {
     }
 }
 
-/// The App Group is derived from the bundle identifier so that changing `BUNDLE_ID_PREFIX` is a
+/// The App Group is derived from the bundle identifier so that changing `APP_BUNDLE_ID` is a
 /// single edit. These pin that rule, because getting it wrong has no build-time symptom — just a
 /// widget that never shows data.
 @Suite("App Group derivation")
