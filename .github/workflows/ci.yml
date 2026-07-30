@@ -86,7 +86,11 @@ jobs:
 
   app:
     name: App build (macOS)
-    runs-on: macos-15
+    # Kept in step with testflight.yml's runner on purpose. This job exists to prove the SwiftUI,
+    # WidgetKit and AppIntents code compiles; on an older image it would prove that against an
+    # older SDK than the one releases are built with, and a compile error under the shipping SDK
+    # would first appear during a TestFlight upload instead of here.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 

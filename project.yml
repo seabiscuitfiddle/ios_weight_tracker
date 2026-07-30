@@ -69,6 +69,18 @@ settings:
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
+    # iPhone only (1 = iPhone, 2 = iPad), overriding XcodeGen's "1,2" default. Here rather than
+    # per-target because an embedded extension may not claim more device families than the app
+    # that contains it, so the widget has to agree.
+    #
+    # This is the portrait-only decision on TallyApp's UISupportedInterfaceOrientations,
+    # enforced. An app that claims iPad support must either support all four orientations or
+    # opt out of multitasking, and iPadOS 26 no longer honours the opt-out
+    # (UIRequiresFullScreen) for apps built against its SDK — so "supports iPad" and "portrait
+    # only" can no longer both be true. The design is portrait, so iPad support gives way.
+    # App Store Connect enforces this at upload, as "No orientations were specified in the
+    # bundle", quoting the four orientations iPad multitasking wants.
+    TARGETED_DEVICE_FAMILY: "1"
     # Warnings-as-errors is off deliberately: a warning should not stop someone building the
     # app to try it, and CI checks the same code with its own stricter settings.
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
@@ -104,11 +116,6 @@ targets:
       base:
         PRODUCT_NAME: Tally
         PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}
-        INFOPLIST_KEY_CFBundleDisplayName: Tally
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        # Portrait only. Every screen in the design is a single portrait column, and a
-        # landscape layout would be a different design rather than a stretched one.
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         CODE_SIGN_ENTITLEMENTS: App/Tally.entitlements
         ENABLE_PREVIEWS: YES
         # Manual signing, for the TestFlight workflow only. This is the one setting that cannot
@@ -128,6 +135,18 @@ targets:
         CFBundleDisplayName: Tally
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
+
+        # Portrait only. Every screen in the design is a single portrait column, and a landscape
+        # layout would be a different design rather than a stretched one. See
+        # TARGETED_DEVICE_FAMILY in `settings:` above, which this obliges.
+        #
+        # Here, and not as INFOPLIST_KEY_UISupportedInterfaceOrientations in `settings:`, which
+        # is where it was and did nothing: the INFOPLIST_KEY_* settings are inputs to the
+        # Info.plist *Xcode* generates, and are ignored by a target that supplies its own file,
+        # as this one does. Nothing warns about it. The key was simply absent from every build
+        # until App Store Connect rejected the upload for having no orientations at all.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
 
         # Build-setting references, not literals, so CI can override the build number without
         # editing a tracked file. See MARKETING_VERSION in `settings:` above.
@@ -152,6 +171,12 @@ targets:
           Speech is transcribed on your device to turn what you say into a log entry.
         NSHealthShareUsageDescription: >-
           Read your weight and workouts from Health so Tally can fill them in for you.
+        # Required by App Store Connect, not by the code: HealthKitImporter asks for read access
+        # only (`toShare: []`), but validation keys off the HealthKit *entitlement* and rejects
+        # the upload unless both strings are present. Worded to say what the app does, since a
+        # string iOS will never display should still be true if someone reads it.
+        NSHealthUpdateUsageDescription: >-
+          Tally only reads from Health. It does not write your weight or workouts back.
 
         # Archivo, added by you — see README. Both the static faces and the variable font are
         # listed because Google Fonts now ships the variable one by default; entries for files
