@@ -13,8 +13,6 @@ name: CI
 # unchanged on forks and pull requests. See README, "GitHub Actions secrets".
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 

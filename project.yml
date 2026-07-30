@@ -69,18 +69,6 @@ settings:
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
-    # iPhone only (1 = iPhone, 2 = iPad), overriding XcodeGen's "1,2" default. Here rather than
-    # per-target because an embedded extension may not claim more device families than the app
-    # that contains it, so the widget has to agree.
-    #
-    # This is the portrait-only decision on TallyApp's UISupportedInterfaceOrientations,
-    # enforced. An app that claims iPad support must either support all four orientations or
-    # opt out of multitasking, and iPadOS 26 no longer honours the opt-out
-    # (UIRequiresFullScreen) for apps built against its SDK — so "supports iPad" and "portrait
-    # only" can no longer both be true. The design is portrait, so iPad support gives way.
-    # App Store Connect enforces this at upload, as "No orientations were specified in the
-    # bundle", quoting the four orientations iPad multitasking wants.
-    TARGETED_DEVICE_FAMILY: "1"
     # Warnings-as-errors is off deliberately: a warning should not stop someone building the
     # app to try it, and CI checks the same code with its own stricter settings.
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
@@ -136,17 +124,30 @@ targets:
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
 
-        # Portrait only. Every screen in the design is a single portrait column, and a landscape
-        # layout would be a different design rather than a stretched one. See
-        # TARGETED_DEVICE_FAMILY in `settings:` above, which this obliges.
+        # Both keys are required, and they say different things on purpose.
         #
-        # Here, and not as INFOPLIST_KEY_UISupportedInterfaceOrientations in `settings:`, which
-        # is where it was and did nothing: the INFOPLIST_KEY_* settings are inputs to the
-        # Info.plist *Xcode* generates, and are ignored by a target that supplies its own file,
-        # as this one does. Nothing warns about it. The key was simply absent from every build
-        # until App Store Connect rejected the upload for having no orientations at all.
+        # iPhone is portrait only: every screen in the design is a single portrait column.
+        # iPad must offer all four, because an iPad app cannot opt out of multitasking —
+        # iPadOS 26 ignores UIRequiresFullScreen for apps built against its SDK — and App Store
+        # Connect rejects the upload with error 90474 if the ~ipad list is any shorter. A
+        # portrait-only iPad app is no longer a thing that can be shipped.
+        #
+        # So iPad gets landscape whether the design has one or not: the portrait column is
+        # centred and the sides are empty. That is the cost of staying on iPad, and it is a
+        # layout problem rather than a build one.
+        #
+        # Both keys live here, and not as INFOPLIST_KEY_UISupportedInterfaceOrientations in
+        # `settings:`, which is where the first one was and did nothing: the INFOPLIST_KEY_*
+        # settings are inputs to the Info.plist *Xcode* generates, and a target that supplies
+        # its own file ignores them. Nothing warns about it. The key was absent from every build
+        # until App Store Connect rejected an upload for having no orientations at all.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
 
         # Build-setting references, not literals, so CI can override the build number without
         # editing a tracked file. See MARKETING_VERSION in `settings:` above.
