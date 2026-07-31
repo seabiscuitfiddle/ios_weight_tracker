@@ -151,6 +151,38 @@ struct FormattingTests {
         #expect(TallyFormat.weight(pounds: 170, unit: .pounds, locale: enUS) == "170.0")
     }
 
+    /// What the editable fields put in the box has to survive being read back out of it, or a
+    /// weight the user never touched changes the moment they tap in and out of the field.
+    @Test("round-trips an editable weight through its own reader")
+    func editableWeightRoundTrips() {
+        let text = TallyFormat.editableWeight(pounds: 168.4, unit: .pounds)
+
+        #expect(text == "168.4")
+        #expect(TallyFormat.number(from: text) == 168.4)
+        // Including the four-figure weights a grouping separator would otherwise break.
+        let heavy = TallyFormat.editableWeight(pounds: 1234.5, unit: .pounds)
+        #expect(heavy == "1234.5")
+        #expect(TallyFormat.number(from: heavy) == 1234.5)
+    }
+
+    @Test("reads a typed number leniently")
+    func typedNumbers() {
+        #expect(TallyFormat.number(from: "170") == 170)
+        #expect(TallyFormat.number(from: " 170.4 ") == 170.4)
+        // A comma is a decimal point, not a grouping separator.
+        #expect(TallyFormat.number(from: "81,5") == 81.5)
+        // Units typed into the field alongside the number.
+        #expect(TallyFormat.number(from: "178 cm") == 178)
+        #expect(TallyFormat.number(from: "155 lb") == 155)
+    }
+
+    /// Nil is the answer for a field with no usable number in it — for a goal weight that means
+    /// "no target", which is a setting rather than a failure.
+    @Test("has no number for an empty or unusable field", arguments: ["", "   ", "abc", "0", "."])
+    func unusableInput(_ text: String) {
+        #expect(TallyFormat.number(from: text) == nil)
+    }
+
     @Test("shows weight change with a direction arrow")
     func weightChange() {
         #expect(TallyFormat.weightChange(pounds: -4.6, unit: .pounds, locale: enUS) == "↓ 4.6 lb")

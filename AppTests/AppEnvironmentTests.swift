@@ -167,6 +167,157 @@ struct TodayModelTests {
     }
 }
 
+/// Both numbers on this screen are typed as well as stepped, and the arithmetic that keeps a
+/// typed field and a canonical pound value in step is where this can go wrong quietly — a logged
+/// weight that isn't the one on the scale is worse than one that fails to save.
+@MainActor
+@Suite("Progress model")
+struct ProgressModelTests {
+    private static let today = Day.today()
+
+    private static func stores(
+        pounds: Double = 170,
+        unit: MassUnit = .pounds,
+        target: Double? = nil
+    ) -> StoreBundle {
+        .inMemory(
+            weights: [WeightSample(day: today, pounds: pounds)],
+            profile: UserProfile(massUnit: unit),
+            goal: GoalSettings(targetPounds: target)
+        )
+    }
+
+    @Test("seeds both fields from what is stored")
+    func seedsFields() {
+        let model = ProgressModel(stores: Self.stores(pounds: 168.4, target: 155))
+        model.load()
+
+        #expect(model.draftText == "168.4")
+        #expect(model.targetText == "155.0")
+    }
+
+    /// The point of the whole change: a weight that is nowhere near the seeded one is typed, not
+    /// tapped towards.
+    @Test("logs the weight that was typed")
+    func logsTypedWeight() throws {
+        let stores = Self.stores(pounds: 170)
+        let model = ProgressModel(stores: stores)
+        model.load()
+
+        model.draftText = "182.4"
+        model.logDraft()
+
+        #expect(try stores.weights.sample(on: Self.today)?.pounds == 182.4)
+        #expect(model.draftPounds == 182.4)
+    }
+
+    @Test("steps from what has been typed rather than from the seeded weight")
+    func stepsFromTypedValue() {
+        let model = ProgressModel(stores: Self.stores(pounds: 170))
+        model.load()
+
+        model.draftText = "182"
+        model.adjustDraft(by: 0.2)
+
+        #expect(model.draftText == "182.2")
+    }
+
+    /// An emptied or half-typed weight field has no sensible reading, and taking it as zero would
+    /// log a body weight of nothing.
+    @Test("leaves the previous weight standing when the field says nothing", arguments: ["", "."])
+    func unreadableWeightFieldReverts(_ text: String) {
+        let model = ProgressModel(stores: Self.stores(pounds: 170))
+        model.load()
+
+        model.draftText = text
+        model.commitDraft()
+
+        #expect(model.draftPounds == 170)
+        #expect(model.draftText == "170.0")
+    }
+
+    @Test("saves a typed goal weight to settings")
+    func savesTypedTarget() throws {
+        let stores = Self.stores(target: 165)
+        let model = ProgressModel(stores: stores)
+        model.load()
+
+        model.focusChanged(from: nil, to: .target)
+        model.targetText = "150"
+        model.focusChanged(from: .target, to: nil)
+
+        #expect(try stores.settings.goalSettings().targetPounds == 150)
+        #expect(model.targetPounds == 150)
+    }
+
+    /// Emptying the field is how a target is given up, and that has to reach storage — otherwise
+    /// the goal engine keeps chasing a number the user has deleted.
+    @Test("clears the target when the field is emptied")
+    func clearsTarget() throws {
+        let stores = Self.stores(target: 155)
+        let model = ProgressModel(stores: stores)
+        model.load()
+
+        model.targetText = ""
+        model.commitTarget()
+
+        #expect(try stores.settings.goalSettings().targetPounds == nil)
+        #expect(model.targetPounds == nil)
+    }
+
+    /// A kilogram target displayed to one decimal doesn't convert back to exactly the pounds it
+    /// came from, so a commit that only compared canonical values would rewrite — and drift —
+    /// the stored target every time the field was tapped into and left alone.
+    @Test("tapping through the goal field without editing changes nothing")
+    func untouchedTargetIsNotRewritten() throws {
+        let stores = Self.stores(unit: .kilograms, target: 155)
+        let model = ProgressModel(stores: stores)
+        model.load()
+
+        model.focusChanged(from: nil, to: .target)
+        model.focusChanged(from: .target, to: nil)
+
+        #expect(try stores.settings.goalSettings().targetPounds == 155)
+    }
+
+    /// Fields are in the unit on screen; pounds stay canonical underneath.
+    @Test("reads and writes the fields in the displayed unit")
+    func convertsFromDisplayedUnit() throws {
+        let stores = Self.stores(pounds: 170, unit: .kilograms, target: 155)
+        let model = ProgressModel(stores: stores)
+        model.load()
+
+        // 170 lb ≈ 77.1 kg, 155 lb ≈ 70.3 kg.
+        #expect(model.draftText.hasPrefix("77."))
+        #expect(model.targetText.hasPrefix("70."))
+
+        model.draftText = "75"
+        model.commitDraft()
+
+        // 75 kg ≈ 165.3 lb.
+        #expect(abs(model.draftPounds - 165.35) < 0.05)
+    }
+
+    /// Everything on this screen reloads whenever anything is written — including from the
+    /// widget, an App Intent, or a Health import. None of that may land in a field mid-edit.
+    @Test("a reload doesn't overwrite the field being typed into")
+    func reloadLeavesAnEditAlone() throws {
+        let stores = Self.stores(pounds: 170, target: 155)
+        let model = ProgressModel(stores: stores)
+        model.load()
+
+        model.focusChanged(from: nil, to: .draft)
+        model.draftText = "18"
+
+        try stores.weights.save(WeightSample(day: Self.today, pounds: 171))
+        model.load()
+
+        #expect(model.draftText == "18")
+        // The field not being touched still refreshes.
+        #expect(model.targetText == "155.0")
+    }
+}
+
 @MainActor
 @Suite("Log model")
 struct LogModelTests {

@@ -57,7 +57,7 @@ struct SettingsScreen: View {
                 // it before it disappears, and refill it when it comes back, so toggling units
                 // never drops what was typed.
                 if previous == .centimeters {
-                    profile.heightCentimeters = Self.number(from: heightText)
+                    profile.heightCentimeters = TallyFormat.number(from: heightText)
                 } else {
                     heightText = Self.heightText(from: profile.heightCentimeters)
                 }
@@ -538,18 +538,18 @@ struct SettingsScreen: View {
 
         heightText = Self.heightText(from: profile.heightCentimeters)
         targetWeightText = goal.targetPounds
-            .map { String(format: "%.1f", profile.massUnit.value(fromPounds: $0)) } ?? ""
+            .map { TallyFormat.editableWeight(pounds: $0, unit: profile.massUnit) } ?? ""
         loadKey(for: ai.providerID)
     }
 
     private func save() {
-        // Parsed leniently: someone typing "178 cm" or using a comma decimal separator meant a
-        // height, and refusing it would be pedantry. The foot/inch pickers write through to the
-        // profile as they are used, so there is nothing to commit for them here.
+        // Parsed leniently, by the same reader the Progress screen's weight fields use — see
+        // `TallyFormat.number(from:)`. The foot/inch pickers write through to the profile as
+        // they are used, so there is nothing to commit for them here.
         if profile.heightUnit == .centimeters {
-            profile.heightCentimeters = Self.number(from: heightText)
+            profile.heightCentimeters = TallyFormat.number(from: heightText)
         }
-        goal.targetPounds = Self.number(from: targetWeightText)
+        goal.targetPounds = TallyFormat.number(from: targetWeightText)
             .map { profile.massUnit.pounds(from: $0) }
 
         // Rebuilt from the fields on the way out, so an edited URL or JSON setting takes effect
@@ -570,13 +570,5 @@ struct SettingsScreen: View {
 
     private static func heightText(from centimeters: Double?) -> String {
         centimeters.map { String(format: "%.0f", $0) } ?? ""
-    }
-
-    private static func number(from text: String) -> Double? {
-        let cleaned = text
-            .replacingOccurrences(of: ",", with: ".")
-            .filter { $0.isNumber || $0 == "." }
-        guard !cleaned.isEmpty, let value = Double(cleaned), value > 0 else { return nil }
-        return value
     }
 }
