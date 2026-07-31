@@ -222,7 +222,8 @@ public enum TallyFormat {
 
     // MARK: Entry detail
 
-    /// The secondary line under an entry: `"8:20 AM · 24g protein"`, `"6:30 AM · exercise"`.
+    /// The secondary line under an entry: `"8:20 AM · 24g protein · 4g fiber"`,
+    /// `"6:30 AM · exercise"`.
     public static func entryDetail(
         _ entry: Entry,
         locale: Locale = .current,
@@ -232,8 +233,14 @@ public enum TallyFormat {
 
         switch entry.kind {
         case .food:
+            // Both macros the day is measured against, so a row can be read without opening it.
+            // Each is dropped below a gram: "0g fiber" against a black coffee is noise, and a
+            // line that always lists both trains the eye to skip it.
             if entry.proteinGrams >= 1 {
                 parts.append("\(grams(entry.proteinGrams, locale: locale))g protein")
+            }
+            if entry.fiberGrams >= 1 {
+                parts.append("\(grams(entry.fiberGrams, locale: locale))g fiber")
             }
         case .exercise:
             if let minutes = entry.durationMinutes, minutes > 0 {
