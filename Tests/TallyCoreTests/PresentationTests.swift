@@ -266,6 +266,8 @@ struct FormattingTests {
         let foodDetail = TallyFormat.entryDetail(food, locale: enUS, calendar: utc)
         #expect(foodDetail.contains("8:20"))
         #expect(foodDetail.contains("24g protein"))
+        // Protein leads, the way the macros are ordered everywhere else in the design.
+        #expect(foodDetail.hasSuffix("· 24g protein · 4g fiber"))
 
         let run = Entry(
             kind: .exercise, label: "Zone 2 run", calories: 320,
@@ -282,10 +284,31 @@ struct FormattingTests {
         #expect(TallyFormat.entryDetail(untimed, locale: enUS, calendar: utc).contains("exercise"))
     }
 
-    @Test("omits a negligible protein figure from the detail line")
-    func omitsTinyProtein() {
-        let coffee = Entry(kind: .food, label: "Black coffee", calories: 5, proteinGrams: 0.2)
+    @Test("omits negligible macro figures from the detail line")
+    func omitsTinyMacros() {
+        let coffee = Entry(
+            kind: .food, label: "Black coffee", calories: 5,
+            proteinGrams: 0.2, fiberGrams: 0.1
+        )
         let detail = TallyFormat.entryDetail(coffee, locale: enUS, calendar: utc)
+        #expect(detail.contains("protein") == false)
+        #expect(detail.contains("fiber") == false)
+    }
+
+    @Test("shows fiber on its own when an entry carries no protein worth naming")
+    func fiberWithoutProtein() {
+        let apple = Entry(kind: .food, label: "Apple", calories: 95, fiberGrams: 4.4)
+        let detail = TallyFormat.entryDetail(apple, locale: enUS, calendar: utc)
+        #expect(detail.contains("4g fiber"))
+        #expect(detail.contains("protein") == false)
+    }
+
+    @Test("leaves macros off exercise entries")
+    func exerciseCarriesNoMacros() {
+        let run = Entry(kind: .exercise, label: "Zone 2 run", calories: 320,
+                        exerciseKind: .cardio, durationMinutes: 38)
+        let detail = TallyFormat.entryDetail(run, locale: enUS, calendar: utc)
+        #expect(detail.contains("fiber") == false)
         #expect(detail.contains("protein") == false)
     }
 }
