@@ -38,8 +38,9 @@ final class AppEnvironment {
     private let bannerDismissals: BannerDismissals
 
     var selectedTab: DeepLink.Tab = .today
-    /// Set by a deep link so the Log screen knows which compose mode to open in.
-    var pendingLogMode: DeepLink.LogMode?
+    /// Set by a deep link so the Log screen knows which compose mode to open in. Read through
+    /// ``takePendingLogMode()``, which is why nothing outside this class may clear it.
+    private(set) var pendingLogMode: DeepLink.LogMode?
     var isShowingSettings = false
 
     /// True when launched by a UI test. Those runs use in-memory storage and a stub parser, so a
@@ -165,6 +166,20 @@ final class AppEnvironment {
         } catch {
             return "Couldn't read from Health: \(error.localizedDescription)"
         }
+    }
+
+    /// Hands the requested compose mode to the Log screen, clearing it in the same step.
+    ///
+    /// Taking rather than reading is what makes the screen safe to ask twice — once when it
+    /// appears, because a widget button sets the mode *before* the screen exists, and once on
+    /// change, for a tap that arrives while it is already up. Only one of the two can win.
+    ///
+    /// It also guarantees the mode is never left set, which matters more than it looks: a mode
+    /// still sitting here reads as "a deep link is steering this screen", so a stale one keeps
+    /// the keyboard shut on every later visit to Log.
+    func takePendingLogMode() -> DeepLink.LogMode? {
+        defer { pendingLogMode = nil }
+        return pendingLogMode
     }
 
     /// Picks up a destination set by an App Intent before the app was foregrounded.

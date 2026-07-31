@@ -1,3 +1,4 @@
+import AppIntents
 import Foundation
 import Testing
 import TallyCore
@@ -47,6 +48,61 @@ struct AppEnvironmentTests {
 
         #expect(environment.selectedTab == .history)
         #expect(environment.pendingLogMode == nil)
+    }
+
+    /// The widget's "Text" button is the one that looked like it did nothing: it sets the mode
+    /// before the Log screen exists, so the screen reads it when it appears rather than being
+    /// told about a change. Both of the screen's reads go through here.
+    @Test("the requested compose mode survives until the Log screen takes it")
+    func pendingModeIsWaitingWhenTheScreenAppears() throws {
+        let environment = environment()
+        let url = try #require(URL(string: "tally://log?mode=text"))
+
+        environment.handle(url)
+
+        #expect(environment.selectedTab == .log)
+        #expect(environment.takePendingLogMode() == .text)
+    }
+
+    /// A mode left set is not inert: the Log screen treats one as "a deep link is steering this
+    /// screen" and holds the keyboard back, so failing to clear it breaks every later visit.
+    @Test("taking the compose mode clears it")
+    func takingTheModeClearsIt() throws {
+        let environment = environment()
+        environment.handle(try #require(URL(string: "tally://log?mode=photo")))
+
+        #expect(environment.takePendingLogMode() == .photo)
+
+        #expect(environment.takePendingLogMode() == nil)
+        #expect(environment.pendingLogMode == nil)
+    }
+
+    /// Tapping the same widget button twice has to work twice. It only can because the first tap
+    /// left nothing behind — a mode that stayed set would make the second tap no change at all.
+    @Test("the same widget button asked for twice is honoured twice")
+    func repeatedTapsOfOneButton() throws {
+        let environment = environment()
+        let url = try #require(URL(string: "tally://log?mode=text"))
+
+        environment.handle(url)
+        #expect(environment.takePendingLogMode() == .text)
+
+        environment.handle(url)
+        #expect(environment.takePendingLogMode() == .text)
+    }
+
+    /// "Open quick log" routes through the same pending mode, and lands the same way: the app is
+    /// launched by the intent, so the screen is always reading a mode set before it existed.
+    @Test("an App Intent's destination is picked up the same way")
+    func intentLinkBecomesAPendingMode() {
+        let environment = environment()
+        OpenQuickLogIntent.pendingLink = .log(mode: .text)
+        defer { OpenQuickLogIntent.pendingLink = nil }
+
+        environment.consumePendingIntentLink()
+
+        #expect(environment.selectedTab == .log)
+        #expect(environment.takePendingLogMode() == .text)
     }
 }
 

@@ -49,21 +49,23 @@ struct LogScreen: View {
                 model = LogModel(stores: environment.stores, parser: environment.parser)
             }
             model?.load()
-            await focusCompose()
+
+            // A widget button or a Siri phrase asks for a mode *before* this screen exists —
+            // switching to the Log tab is what brings it on screen — so `onChange` below never
+            // sees that value and the arriving case has to be handled here as well. Missing it
+            // is what made the widget's "Text" button land on an unfocused field, and left the
+            // mode set, which then kept the keyboard shut on every later visit too.
+            if let mode = environment.takePendingLogMode() {
+                await openCompose(mode)
+            } else {
+                await focusCompose()
+            }
         }
         .onChange(of: environment.pendingLogMode) { _, mode in
-            // Arrived from a widget button or from Siri.
-            guard let mode else { return }
-            environment.pendingLogMode = nil
-
-            switch mode {
-            case .text:
-                isComposeFocused = true
-            case .photo:
-                isComposeFocused = false
-                isChoosingPhotoSource = true
-            case .voice:
-                Task { await startVoice() }
+            // Arrived from a widget button or from Siri with the screen already up.
+            guard mode != nil else { return }
+            Task {
+                if let mode = environment.takePendingLogMode() { await openCompose(mode) }
             }
         }
         // Mirror the live transcript into the field so the user can see what was heard and fix
@@ -326,6 +328,23 @@ struct LogScreen: View {
 
     // MARK: Actions
 
+    /// Opens whichever way of composing was asked for.
+    ///
+    /// Text goes through `focusCompose` rather than setting focus directly, because a mode that
+    /// arrived from a widget is applied as the screen is being installed — exactly the case the
+    /// wait in there exists for.
+    private func openCompose(_ mode: DeepLink.LogMode) async {
+        switch mode {
+        case .text:
+            await focusCompose()
+        case .photo:
+            isComposeFocused = false
+            isChoosingPhotoSource = true
+        case .voice:
+            await startVoice()
+        }
+    }
+
     /// Opens the keyboard on arrival.
     ///
     /// The brief wait isn't superstition: setting `@FocusState` in the same turn the field is
@@ -333,7 +352,8 @@ struct LogScreen: View {
     /// time", which is precisely the tap this redesign is meant to remove.
     private func focusCompose() async {
         try? await Task.sleep(for: .milliseconds(50))
-        // Don't fight a deep link that asked for voice or the camera instead.
+        // Don't fight a deep link that asked for voice or the camera instead — one that lands
+        // during the wait above is still to be applied, and applying it wins over the keyboard.
         guard environment.pendingLogMode == nil, !transcriber.isRecording,
               !isChoosingPhotoSource, !isShowingCamera, !isShowingLibrary
         else { return }
