@@ -12,8 +12,13 @@
 # The branch this script pushes matches that pattern, so a successful run
 # excludes itself from the next poll.
 #
-# Requirements: gh (authenticated), git, claude (Claude Code CLI, logged in
-# or ANTHROPIC_API_KEY set), jq, flock, timeout.
+# Requirements: gh, git, claude (Claude Code CLI), jq, flock, timeout.
+#
+# Both CLIs must authenticate without a desktop session, because cron has none.
+# Keyring-backed credentials will fail there. Put tokens in the environment:
+#
+#   CLAUDE_CODE_OAUTH_TOKEN   from `claude setup-token`
+#   GH_TOKEN                  a PAT with 'repo' scope
 
 set -euo pipefail
 
@@ -244,10 +249,17 @@ log "=== Poll end (processed $PROCESSED issue(s)) ==="
 #   crontab -e
 #   */5 * * * * /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
 #
-# cron runs with a minimal PATH and environment. If gh or claude aren't found,
-# set them explicitly at the top of the crontab:
+# cron runs with a minimal PATH and no desktop session, so set these at the top
+# of the crontab:
 #
 #   PATH=/home/brianw/.local/bin:/usr/local/bin:/usr/bin:/bin
+#   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
+#   GH_TOKEN=ghp_...
+#
+# Verify that environment is sufficient before trusting the schedule:
+#
+#   env -i PATH=... CLAUDE_CODE_OAUTH_TOKEN=... GH_TOKEN=... DRY_RUN=1 \
+#     /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
 #
 # Retrying an issue: remove the claude-failed label. Re-running an issue that
 # already has a PR: delete the issue_<number>/... branch first.
