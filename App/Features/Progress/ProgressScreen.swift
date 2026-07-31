@@ -7,6 +7,10 @@ struct ProgressScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: ProgressModel?
 
+    /// One focus state for both weight fields, so the model is told which one it is losing as
+    /// well as which one it is gaining.
+    @FocusState private var focusedField: WeightField?
+
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader(kicker: "progress", title: "Weight & Goal") {
@@ -35,11 +39,23 @@ struct ProgressScreen: View {
                     .padding(.horizontal, Metrics.gutter)
                     .padding(.vertical, Metrics.space4 + 4)
                 }
+                // A decimal keypad has no return key, so scrolling the screen away is one of the
+                // two ways off it. The other is the Done button on the keyboard's own bar.
+                .scrollDismissesKeyboard(.interactively)
             } else {
                 Spacer()
             }
         }
         .background(Color.tallyBackground)
+        .onChange(of: focusedField) { previous, current in
+            model?.focusChanged(from: previous, to: current)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focusedField = nil }
+            }
+        }
         .task {
             if model == nil {
                 model = ProgressModel(stores: environment.stores)
@@ -96,32 +112,51 @@ struct ProgressScreen: View {
 
     // MARK: Entry
 
+    /// The number itself is a field, not a label.
+    ///
+    /// The steppers stay — a tenth either way after standing on the scale is exactly what they're
+    /// for — but they cannot be the only way in. Weight moves in jumps the arrows can't reach: a
+    /// first reading, a scale you haven't stood on in a month, a unit switch. Two hundred taps to
+    /// enter a number you already know is not an interaction, and the arrows now step from
+    /// whatever has been typed rather than from the value they were seeded with.
     @ViewBuilder
     private func weightEntry(_ model: ProgressModel) -> some View {
+        @Bindable var model = model
+
         VStack(alignment: .leading, spacing: 7) {
             Kicker("log today's weight")
 
             HStack(spacing: 0) {
                 stepperButton("−") { model.adjustDraft(by: -0.2) }
 
+                // Both halves take equal space, which centres the number-and-unit pair the way a
+                // single centred label did — while making the whole middle of the row the field's
+                // hit area rather than just the glyphs.
                 HStack(alignment: .firstTextBaseline, spacing: Metrics.space1) {
-                    Text(TallyFormat.weight(pounds: model.draftPounds, unit: model.unit))
+                    TextField("", text: $model.draftText)
                         .font(.tallyDisplay(24))
                         .tracking(Typography.Display.tracking * 24)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .focused($focusedField, equals: .draft)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .accessibilityLabel("Weight to log")
+                        .accessibilityIdentifier("progress.weightField")
                     Text(model.unit.shortName)
                         .font(.tallyScaled(13, weight: .semibold))
                         .foregroundStyle(Color.tallySecondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity)
                 .padding(.vertical, 11)
-                .accessibilityLabel("Weight to log")
-                .accessibilityValue(TallyFormat.weightWithUnit(
-                    pounds: model.draftPounds, unit: model.unit
-                ))
 
                 stepperButton("+") { model.adjustDraft(by: 0.2) }
 
-                Button { model.logDraft() } label: {
+                Button {
+                    // Gives the keyboard up first, so the row ends up showing the reading that
+                    // was just logged rather than a field still open over it.
+                    focusedField = nil
+                    model.logDraft()
+                } label: {
                     Text("Log")
                         .font(.tallyFixed(13, weight: .heavy))
                         .tracking(0.04 * 13)
@@ -192,12 +227,13 @@ struct ProgressScreen: View {
                     Text("Target")
                         .font(.tallyFixed(17, weight: .heavy))
                         .foregroundStyle(Color.tallyText)
-                    Spacer()
-                    if let target = model.targetPounds, let current = model.currentTrendPounds {
-                        Text("\(TallyFormat.weight(pounds: current, unit: model.unit)) → \(TallyFormat.weightWithUnit(pounds: target, unit: model.unit))")
+                    Spacer(minLength: Metrics.space2)
+                    if let current = model.currentTrendPounds {
+                        Text("\(TallyFormat.weight(pounds: current, unit: model.unit)) →")
                             .font(.tallyScaled(13, weight: .semibold))
-                            .foregroundStyle(Color.tallyText)
+                            .foregroundStyle(Color.tallySecondaryText)
                     }
+                    targetField(model)
                 }
 
                 // Inverted panel — the design's way of marking the one derived number that
@@ -251,6 +287,42 @@ struct ProgressScreen: View {
         } else {
             GoalSetupPrompt { environment.isShowingSettings = true }
         }
+    }
+
+    /// The goal weight, edited where it is read.
+    ///
+    /// Settings still holds it, and has to — it belongs beside the rate that works with it. But
+    /// this is the screen that shows what the target implies, and changing "168 → 155" to
+    /// "168 → 150" is a different act from opening Settings and hunting for a row: the projected
+    /// date under it moves as soon as the field is left, which is the whole answer to "what would
+    /// that mean?".
+    ///
+    /// Bordered rather than bare because an unadorned number in a panel of numbers gives no
+    /// indication it can be touched.
+    @ViewBuilder
+    private func targetField(_ model: ProgressModel) -> some View {
+        @Bindable var model = model
+
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.space1) {
+            TextField(model.unit.shortName, text: $model.targetText)
+                .font(.tallyScaled(13, weight: .semibold))
+                .foregroundStyle(Color.tallyText)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .focused($focusedField, equals: .target)
+                // Wide enough for "155.0" at the label size, and fixed so the panel's heading
+                // doesn't reflow with every keystroke.
+                .frame(width: 56)
+                .accessibilityLabel("Goal weight")
+                .accessibilityIdentifier("progress.goalWeightField")
+            Text(model.unit.shortName)
+                .font(.tallyScaled(13, weight: .semibold))
+                .foregroundStyle(Color.tallySecondaryText)
+        }
+        .padding(.horizontal, Metrics.space2)
+        .padding(.vertical, Metrics.space1 + 1)
+        .background(Color.tallySurface)
+        .tallyHairlineBorder()
     }
 }
 

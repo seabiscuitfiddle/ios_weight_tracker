@@ -113,6 +113,37 @@ public enum TallyFormat {
         return "\(arrow) \(weightWithUnit(pounds: abs(pounds), unit: unit, locale: locale))"
     }
 
+    // MARK: Reading numbers back
+
+    /// Reads the number out of what somebody typed into a weight or height field.
+    ///
+    /// Deliberately lenient, and shared by every such field so they all forgive the same things.
+    /// "178 cm", "81,5" and a stray trailing space are all unmistakably numbers; refusing them
+    /// would be pedantry that lands on the user as a value which silently declines to save. A
+    /// comma is read as a decimal point rather than as a grouping separator — at the magnitudes
+    /// these fields hold nobody types a grouped number, and most of the world writes "81,5" for
+    /// what the US writes as "81.5".
+    ///
+    /// - Returns: the number, or nil when there isn't a positive one in there. Nil is a real
+    ///   answer here rather than a failure: an empty goal weight means "no target".
+    public static func number(from text: String) -> Double? {
+        let cleaned = text
+            .replacingOccurrences(of: ",", with: ".")
+            .filter { $0.isNumber || $0 == "." }
+        guard !cleaned.isEmpty, let value = Double(cleaned), value > 0 else { return nil }
+        return value
+    }
+
+    /// A weight as an editable field holds it: plain digits in the displayed unit, no grouping
+    /// separator.
+    ///
+    /// Distinct from ``weight(pounds:unit:locale:)`` on purpose. That renders a number for
+    /// reading; this one has to survive being read back by ``number(from:)``, and a grouped
+    /// "1,234.5" would not.
+    public static func editableWeight(pounds: Double, unit: MassUnit) -> String {
+        String(format: "%.1f", unit.value(fromPounds: pounds))
+    }
+
     // MARK: Dates
 
     /// The design's date kicker: `"THU · JUL 23"`.
