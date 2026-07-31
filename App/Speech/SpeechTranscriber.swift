@@ -81,8 +81,11 @@ final class SpeechTranscriber {
                 for await update in updates { self?.apply(update) }
             }
         } catch {
-            errorMessage = (error as? VoiceInputError)?.userMessage
-                ?? "Couldn't start recording: \(error.localizedDescription)"
+            // An error from somewhere other than the engine's own vocabulary is still shown the
+            // same way, so what the user reads doesn't depend on which layer gave up.
+            let failure: VoiceInputError = error as? VoiceInputError
+                ?? .audioSessionFailed(error.localizedDescription)
+            errorMessage = failure.userMessage
             stop()
         }
     }
@@ -185,7 +188,20 @@ enum VoiceInputError: Error, Hashable, Sendable {
         case .noAudioInput:
             "No microphone is available, so there's nothing to record from."
         case .audioSessionFailed(let reason):
-            "Couldn't start recording: \(reason)"
+            Self.recordingFailure(reason)
         }
+    }
+
+    /// The audio session's own words about a failure, made into a sentence.
+    ///
+    /// What arrives here is a `localizedDescription` from AVFoundation, which is a fragment at
+    /// least as often as a sentence — "no input node" — and a message that stops mid-thought
+    /// reads as the app breaking rather than explaining itself. A reason that says nothing at
+    /// all is left out entirely rather than shown as a dangling colon.
+    private static func recordingFailure(_ reason: String) -> String {
+        let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let end = reason.last else { return "Couldn't start recording. Try again." }
+        let fullStop = ".!?".contains(end) ? "" : "."
+        return "Couldn't start recording: \(reason)\(fullStop)"
     }
 }
