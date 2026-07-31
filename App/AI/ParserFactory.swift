@@ -8,7 +8,15 @@ import TallyCore
 /// cannot drift into using different providers — the failure that would be hardest to notice,
 /// since both would appear to work while billing different accounts.
 enum ParserFactory {
+    /// Every parser the app uses is wrapped for background execution, whichever one it is: the
+    /// lock button suspends a request to Apple Intelligence exactly as it suspends a network one,
+    /// and a parse the user is waiting on should survive being left alone. See
+    /// ``BackgroundedNutritionParser``.
     static func make(_ settings: AISettings, bundle: Bundle = .main) -> any NutritionParser {
+        BackgroundedNutritionParser(wrapped: configured(settings, bundle: bundle))
+    }
+
+    private static func configured(_ settings: AISettings, bundle: Bundle) -> any NutritionParser {
         // Preferred but not required: if Apple Intelligence is off or the device is ineligible,
         // falling through to the configured provider is better than failing every request over a
         // preference the user set months ago on a different phone.

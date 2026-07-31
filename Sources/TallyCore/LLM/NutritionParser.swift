@@ -181,6 +181,11 @@ public enum NutritionParserError: Error, Hashable, Sendable {
     case overloaded
     case requestTooLarge
     case offline(String)
+    /// The app was put to sleep before the reply arrived — the phone was locked or the app left
+    /// for longer than the extra time the system grants. Kept apart from ``offline`` because the
+    /// network was never the problem, and sending someone to check their connection over it would
+    /// be sending them to look in the wrong place.
+    case interrupted
     /// The model declined. Rare for food, but it is a documented outcome and reading
     /// `content` without checking would crash on an empty array.
     case refused(String?)
@@ -195,7 +200,7 @@ public enum NutritionParserError: Error, Hashable, Sendable {
     /// Whether trying the same request again could plausibly succeed.
     public var isRetryable: Bool {
         switch self {
-        case .rateLimited, .overloaded, .offline, .serverError, .truncated: true
+        case .rateLimited, .overloaded, .offline, .serverError, .truncated, .interrupted: true
         case .missingAPIKey, .invalidAPIKey, .insufficientCredit, .unknownModel,
              .imagesUnsupported, .requestTooLarge, .refused,
              .malformedResponse, .nothingRecognized: false
@@ -230,6 +235,8 @@ public enum NutritionParserError: Error, Hashable, Sendable {
             "That photo is too large. Try a smaller one."
         case .offline:
             "No connection. You can still add this entry by hand."
+        case .interrupted:
+            "Tally was put to sleep before that came back. Try again."
         case .refused(let explanation):
             explanation ?? "That request was declined. Try describing the food differently."
         case .truncated:

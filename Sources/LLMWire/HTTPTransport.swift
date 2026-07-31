@@ -60,6 +60,13 @@ public struct URLSessionTransport: HTTPTransport {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = resourceTimeout
+        #if canImport(Darwin)
+        // Keeps the connection open when the app stops being on screen. A caller that has
+        // arranged to keep running — an iOS background task assertion — otherwise waits out its
+        // borrowed time on a socket the system tore down the moment the phone was locked, which
+        // is the same lost reply the assertion was taken out to prevent.
+        configuration.shouldUseExtendedBackgroundIdleMode = true
+        #endif
         return URLSessionTransport(session: URLSession(configuration: configuration))
     }
 

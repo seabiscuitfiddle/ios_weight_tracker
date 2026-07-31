@@ -768,6 +768,7 @@ struct ParserErrorPresentationTests {
         .overloaded,
         .requestTooLarge,
         .offline("x"),
+        .interrupted,
         .refused(nil),
         .truncated,
         .malformedResponse("x"),
@@ -787,6 +788,9 @@ struct ParserErrorPresentationTests {
         #expect(NutritionParserError.overloaded.isRetryable)
         #expect(NutritionParserError.offline("x").isRetryable)
         #expect(NutritionParserError.truncated.isRetryable)
+        // Nothing was wrong with the request — it simply didn't get to finish — so sending it
+        // again is the whole fix.
+        #expect(NutritionParserError.interrupted.isRetryable)
 
         #expect(NutritionParserError.missingAPIKey.isRetryable == false)
         #expect(NutritionParserError.invalidAPIKey.isRetryable == false)
