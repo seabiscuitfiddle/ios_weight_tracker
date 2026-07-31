@@ -29,7 +29,11 @@ REPO="seabiscuitfiddle/ios_weight_tracker"   # owner/repo
 TRUSTED_AUTHOR="seabiscuitfiddle"            # only issues opened by this login are implemented
 IN_PROGRESS_LABEL="claude-working"           # applied while Claude is on it
 FAILED_LABEL="claude-failed"                 # applied on error / no changes; also a skip marker
-WORKROOT="$HOME/.claude-autopilot/${REPO//\//__}"
+
+# cron sets HOME, but a stripped environment (env -i, some systemd units) does
+# not, and set -u would abort on the WORKROOT expansion below.
+: "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
+WORKROOT="${WORKROOT:-$HOME/.claude-autopilot/${REPO//\//__}}"
 LOCKFILE="/tmp/claude-autopilot-${REPO//\//__}.lock"
 LOG_FILE="$WORKROOT/poll.log"
 MAX_ISSUES_PER_RUN=3                         # cap so one poll can't blow up your API spend
@@ -258,8 +262,11 @@ log "=== Poll end (processed $PROCESSED issue(s)) ==="
 #
 # Verify that environment is sufficient before trusting the schedule:
 #
-#   env -i PATH=... CLAUDE_CODE_OAUTH_TOKEN=... GH_TOKEN=... DRY_RUN=1 \
-#     /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
+#   env -i HOME="$HOME" PATH=... CLAUDE_CODE_OAUTH_TOKEN=... GH_TOKEN=... \
+#     DRY_RUN=1 /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
+#
+# HOME must be passed through: cron provides it, env -i does not, and both gh
+# and claude look under it for config.
 #
 # Retrying an issue: remove the claude-failed label. Re-running an issue that
 # already has a PR: delete the issue_<number>/... branch first.
