@@ -90,6 +90,13 @@ struct TallySummaryView: View {
 
             quickLogStrip
         }
+        // The default foreground, pinned. Every other colour here is already a palette token,
+        // but the ring's number wasn't: it inherited SwiftUI's default, which follows the
+        // system colour scheme and turns near-white in dark mode — on top of a container
+        // background that is a fixed light surface, so the biggest number on the widget was
+        // the one that disappeared. Setting the default at the root also means a `Text` added
+        // later can't reintroduce the same bug by leaving its colour unstated.
+        .foregroundStyle(Color(token: Palette.text))
     }
 
     @ViewBuilder private var ring: some View {

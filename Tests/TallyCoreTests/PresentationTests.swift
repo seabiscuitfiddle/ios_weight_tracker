@@ -365,4 +365,60 @@ struct DesignTokenTests {
     func fontFamily() {
         #expect(Typography.family == "Archivo")
     }
+
+    /// Contrast, pinned for the same reason as the hex values above: it is a property of the
+    /// rendered result that nothing else here can see.
+    ///
+    /// It matters most in the home-screen widget, which paints `background` into its container
+    /// and then draws every label in `text` — nothing there adapts to the system colour scheme,
+    /// so this ratio *is* the widget's legibility. Lighten `text` and the widget's numbers wash
+    /// out with no other test to notice.
+    @Test("keep text legible against the background")
+    func textContrast() {
+        let body = contrastRatio(Palette.text, on: Palette.background)
+        #expect(body >= 7)  // WCAG AAA.
+
+        // Secondary labels — the kickers under the ring and above each bar — are deliberately
+        // quieter, but stay above the 3:1 floor that keeps them readable rather than decorative.
+        let secondary = contrastRatio(
+            Palette.text, on: Palette.background, opacity: Palette.secondaryTextOpacity
+        )
+        #expect(secondary >= 3)
+        #expect(secondary < body)
+    }
+}
+
+/// WCAG 2.1 contrast between a foreground token and an opaque background token.
+///
+/// A translucent foreground is composited onto the background first, which is what the
+/// compositor does with the `opacity:` argument the views pass to `Color(token:)`.
+private func contrastRatio(
+    _ foreground: UInt32, on background: UInt32, opacity: Double = 1
+) -> Double {
+    func channels(_ token: UInt32) -> (Double, Double, Double) {
+        (
+            Double((token >> 16) & 0xFF) / 255,
+            Double((token >> 8) & 0xFF) / 255,
+            Double(token & 0xFF) / 255
+        )
+    }
+
+    func luminance(_ rgb: (Double, Double, Double)) -> Double {
+        func linear(_ component: Double) -> Double {
+            component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(rgb.0) + 0.7152 * linear(rgb.1) + 0.0722 * linear(rgb.2)
+    }
+
+    let back = channels(background)
+    let front = channels(foreground)
+    let composited = (
+        front.0 * opacity + back.0 * (1 - opacity),
+        front.1 * opacity + back.1 * (1 - opacity),
+        front.2 * opacity + back.2 * (1 - opacity)
+    )
+
+    let lighter = max(luminance(composited), luminance(back))
+    let darker = min(luminance(composited), luminance(back))
+    return (lighter + 0.05) / (darker + 0.05)
 }
