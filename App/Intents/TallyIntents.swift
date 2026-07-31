@@ -90,6 +90,9 @@ struct LogFoodOrExerciseIntent: AppIntent {
             $0.entry(on: today, loggedAt: now, source: .llmVoice, rawInput: text)
         }
         try stores.entries.save(entries)
+        // Nothing is observing this process's stores — an intent invoked by Siri exits as soon
+        // as it has spoken — so the reload is asked for here rather than left to WidgetRefresher.
+        WidgetRefresher().reload()
 
         // Confirm with the number that was actually recorded — a bare "done" gives the user no
         // way to notice a wrong estimate while they can still fix it easily.
@@ -136,6 +139,9 @@ struct LogWeightIntent: AppIntent {
         try stores.weights.save(WeightSample(
             day: Day.today(), pounds: pounds, measuredAt: Date(), source: .manual
         ))
+        // Today's weight moves the goal the widget draws its ring against, so it is as much a
+        // widget change as a food entry is. Same reason as above for asking here.
+        WidgetRefresher().reload()
 
         let formatted = TallyFormat.weightWithUnit(pounds: pounds, unit: profile.massUnit)
         return .result(dialog: "Recorded \(formatted).")
