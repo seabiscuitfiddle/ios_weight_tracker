@@ -1,15 +1,21 @@
-import AVFoundation
 import Foundation
 import Observation
-import Speech
 
 /// Transcribes speech to text **on the device**.
 ///
-/// `requiresOnDeviceRecognition = true` is the point of this type, not an optimisation. Left off,
+/// On-device recognition is the point of voice input here, not an optimisation. Left off,
 /// `SFSpeechRecognizer` uploads audio to Apple's servers for transcription — which would quietly
 /// break the app's promise that the only thing leaving the device is the text you chose to send
 /// to your own LLM key. On-device recognition is somewhat less accurate; that is the right trade
 /// here, and the text is editable before it is logged anyway.
+///
+/// The microphone and the recogniser sit behind ``VoiceEngine`` rather than being used directly.
+/// That is not for swappability: AVFoundation *raises* — an Objective-C exception, uncatchable
+/// from Swift, so the app disappears rather than showing an error — when it is asked to record
+/// with a microphone that isn't there, or to tap an input that is already tapped. Both are
+/// reachable from an ordinary tap on the Voice button, so the order these calls happen in and
+/// what a failed start leaves behind are the load-bearing parts of this feature, and the
+/// protocol is what lets a test check them.
 @Observable
 @MainActor
 final class SpeechTranscriber {
@@ -18,115 +24,168 @@ final class SpeechTranscriber {
     private(set) var isRecording = false
     private(set) var errorMessage: String?
 
-    private let recognizer = SFSpeechRecognizer(locale: Locale.current)
-    private let audioEngine = AVAudioEngine()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
+    /// Whether there is a recogniser to start, so the UI can hide voice input rather than
+    /// offering a button that fails.
+    ///
+    /// Stored rather than read through to the recogniser on demand, because availability
+    /// genuinely changes while the app is up — a model finishes installing, a phone call ends —
+    /// and a value computed from a type `@Observable` can't see registers no dependency at all.
+    /// The button was therefore drawn once, from whatever happened to be true at launch, and a
+    /// recogniser that wasn't ready yet meant no Voice button for the rest of the run.
+    private(set) var isAvailable: Bool
 
-    /// False when the device or locale has no on-device model, so the UI can hide voice input
-    /// rather than offering a button that fails.
-    var isAvailable: Bool {
-        guard let recognizer else { return false }
-        return recognizer.isAvailable && recognizer.supportsOnDeviceRecognition
+    private let engine: any VoiceEngine
+    /// Consumes one session's updates. Held so it can be cancelled: a stopped session must not
+    /// keep writing into ``transcript``.
+    private var session: Task<Void, Never>?
+    /// True from the first tap until the session is either running or has failed. The permission
+    /// prompt is a long suspension the first time round, and `isRecording` is still false
+    /// throughout it, so without this a second tap starts a second session on top of the first.
+    private var isStarting = false
+
+    init(engine: any VoiceEngine = SystemVoiceEngine()) {
+        self.engine = engine
+        self.isAvailable = engine.isAvailable
+
+        // Runs for as long as the transcriber does — availability changes between sessions as
+        // much as during one, which is the whole reason for watching it. Weakly, so this holds
+        // nothing alive: the loop simply stops finding anything to update.
+        let availability = engine.availability
+        Task { [weak self] in
+            for await available in availability { self?.isAvailable = available }
+        }
     }
+
+    /// Starts listening, or explains why it can't.
+    ///
+    /// Every failure ends in ``stop``, including one raised before anything was started. Tearing
+    /// down what did get set up is the whole difference between a start that failed and a start
+    /// that takes the *next* one down with it.
+    func start() async {
+        guard !isRecording, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+
+        transcript = ""
+        errorMessage = nil
+
+        do {
+            // Before the permission prompts, not after: asking someone for their microphone and
+            // then telling them transcription can't run anyway is two dialogs' worth of nothing.
+            guard isAvailable else { throw VoiceInputError.recognizerUnavailable }
+
+            try await engine.requestAuthorization()
+            let updates = try engine.start()
+            isRecording = true
+            session = Task { [weak self] in
+                for await update in updates { self?.apply(update) }
+            }
+        } catch {
+            errorMessage = (error as? VoiceInputError)?.userMessage
+                ?? "Couldn't start recording: \(error.localizedDescription)"
+            stop()
+        }
+    }
+
+    /// Stops recording and leaves ``transcript`` holding whatever was heard.
+    ///
+    /// Unconditional, and correct to call when nothing is running: the teardown is the same
+    /// either way. A `stop` that first decided whether there was anything to stop is how a
+    /// half-started session — one whose audio engine failed on the line *after* the microphone
+    /// was already tapped — used to survive into the next attempt and crash it.
+    func stop() {
+        session?.cancel()
+        session = nil
+        engine.stop()
+        isRecording = false
+    }
+
+    private func apply(_ update: VoiceUpdate) {
+        switch update {
+        case .transcript(let text):
+            transcript = text
+        case .ended(let failed):
+            // A failure that arrives after something was heard isn't worth saying: the words are
+            // in the field, editable, which is what the user came for. One that arrives with
+            // nothing heard is the case where silence would read as the button doing nothing.
+            if failed, transcript.isEmpty {
+                errorMessage = "Nothing was heard. Try again, closer to the microphone."
+            }
+            stop()
+        }
+    }
+}
+
+/// What a running voice session reports back.
+enum VoiceUpdate: Sendable {
+    /// Everything heard so far, sent again on every change.
+    case transcript(String)
+    /// The session ended on its own — a final result, or recognition giving up.
+    case ended(failed: Bool)
+}
+
+/// The microphone and the on-device recogniser, behind one protocol.
+///
+/// See ``SpeechTranscriber`` for why this exists.
+@MainActor
+protocol VoiceEngine: AnyObject {
+    /// Whether a session could be started right now.
+    var isAvailable: Bool { get }
+
+    /// Changes to ``isAvailable``. One stream, for one consumer: the transcriber that owns this.
+    var availability: AsyncStream<Bool> { get }
 
     /// Requests both permissions this needs: speech recognition and the microphone.
     ///
     /// Both, because they are genuinely separate grants and being denied either one makes voice
     /// logging impossible — asking for one and discovering the other at record time would show
     /// the user a failure instead of a prompt.
-    func requestAuthorization() async -> Bool {
-        let speechGranted = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
+    func requestAuthorization() async throws
+
+    /// Starts recording. The returned stream ends when the session does.
+    func start() throws -> AsyncStream<VoiceUpdate>
+
+    /// Tears down everything ``start`` sets up. Must be idempotent, and must be correct to call
+    /// after a `start` that threw part-way through.
+    func stop()
+}
+
+/// Why voice input couldn't start.
+///
+/// Each case carries a ``userMessage`` for the same reason `NutritionParserError` does: "an error
+/// occurred" tells someone holding a phone to their mouth nothing about what to do next.
+enum VoiceInputError: Error, Hashable, Sendable {
+    /// The recogniser exists but isn't ready — no network for its assets, or another app has it.
+    case recognizerUnavailable
+    /// This device or language has no on-device model, and Tally will not transcribe off-device.
+    case onDeviceModelUnavailable
+    case speechPermissionDenied
+    case microphonePermissionDenied
+    /// The audio session came up with nothing to record from: the simulator, or an input route
+    /// that never arrived.
+    case noAudioInput
+    /// The audio session or engine refused to start, with whatever it said about why.
+    case audioSessionFailed(String)
+
+    var userMessage: String {
+        switch self {
+        case .recognizerUnavailable:
+            "Speech recognition isn't available right now. Try again in a moment."
+        case .onDeviceModelUnavailable:
+            // Says what Tally won't do as well as what's missing, because "unavailable" for a
+            // feature that plainly works in other apps reads as a bug rather than a choice.
+            """
+            Your language has no on-device transcription on this device, and Tally won't send \
+            your voice to Apple's servers. Type it instead.
+            """
+        case .speechPermissionDenied:
+            "Speech recognition permission was declined. You can enable it in Settings."
+        case .microphonePermissionDenied:
+            "Microphone access was declined. You can enable it in Settings."
+        case .noAudioInput:
+            "No microphone is available, so there's nothing to record from."
+        case .audioSessionFailed(let reason):
+            "Couldn't start recording: \(reason)"
         }
-        guard speechGranted else {
-            errorMessage = "Speech recognition permission was declined. You can enable it in Settings."
-            return false
-        }
-
-        let micGranted = await AVAudioApplication.requestRecordPermission()
-        if !micGranted {
-            errorMessage = "Microphone access was declined. You can enable it in Settings."
-        }
-        return micGranted
-    }
-
-    func start() async {
-        guard !isRecording else { return }
-
-        guard let recognizer, recognizer.isAvailable else {
-            errorMessage = "Speech recognition isn't available right now."
-            return
-        }
-        guard await requestAuthorization() else { return }
-
-        transcript = ""
-        errorMessage = nil
-
-        do {
-            try configureAudioSession()
-
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            request.shouldReportPartialResults = true
-            // The load-bearing line — see the type's documentation.
-            request.requiresOnDeviceRecognition = true
-            self.request = request
-
-            let inputNode = audioEngine.inputNode
-            let format = inputNode.outputFormat(forBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-                request.append(buffer)
-            }
-
-            audioEngine.prepare()
-            try audioEngine.start()
-            isRecording = true
-
-            task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    if let result {
-                        self.transcript = result.bestTranscription.formattedString
-                    }
-                    // Any error, or a final result, means this session is over.
-                    if error != nil || result?.isFinal == true {
-                        self.stop()
-                    }
-                }
-            }
-        } catch {
-            errorMessage = "Couldn't start recording: \(error.localizedDescription)"
-            stop()
-        }
-    }
-
-    /// Stops recording and leaves ``transcript`` holding whatever was heard.
-    func stop() {
-        guard isRecording || task != nil else { return }
-
-        audioEngine.inputNode.removeTap(onBus: 0)
-        if audioEngine.isRunning { audioEngine.stop() }
-
-        request?.endAudio()
-        task?.cancel()
-        request = nil
-        task = nil
-        isRecording = false
-
-        // Hand the audio session back so other audio — music, a podcast the user paused —
-        // can resume.
-        try? AVAudioSession.sharedInstance().setActive(
-            false, options: .notifyOthersOnDeactivation
-        )
-    }
-
-    private func configureAudioSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        // `.record` rather than `.playAndRecord`: Tally plays nothing, and the narrower category
-        // is less disruptive to whatever else is making sound.
-        try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
     }
 }

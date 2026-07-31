@@ -360,11 +360,18 @@ struct LogScreen: View {
         isComposeFocused = true
     }
 
+    /// Starts listening, and falls back to the keyboard if it can't.
+    ///
+    /// No `isAvailable` guard, deliberately. The widget's Voice button is a deep link into here,
+    /// and a silent return left the user looking at an empty screen that had visibly opened for
+    /// them and then done nothing — indistinguishable from a crash, and reported as one.
+    /// `transcriber.start()` says why instead, and the keyboard is the fallback that still lets
+    /// the log they came to make happen.
     private func startVoice() async {
-        guard transcriber.isAvailable else { return }
         draft = ""
         draftCameFromVoice = false
         await transcriber.start()
+        if !transcriber.isRecording { await focusCompose() }
     }
 
     private func attach(_ image: UIImage) {
