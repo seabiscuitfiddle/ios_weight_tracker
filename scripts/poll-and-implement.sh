@@ -13,10 +13,15 @@
 # excludes itself from the next poll.
 #
 # Queue rule: at most MAX_OPEN_AUTOPILOT_PRS unmerged autopilot PRs exist at any
-# time (default 1). While one is open the poller does nothing, so merging that
-# PR is what releases the next issue. Each branch is cut fresh from the tip of
-# the default branch, which combined with the queue limit means every generated
-# PR is written against a main that already contains the previous one.
+# time (default 1). Each branch is cut fresh from the tip of the default branch,
+# which combined with the queue limit means every generated PR is written
+# against a main that already contains the previous one.
+#
+# While a PR is open the poller does not start new work, but it is not idle: if
+# that PR's checks have failed it spends the tick repairing them, because the PR
+# is the only place the code is really compiled and tested. Green, it waits for
+# review; still running, it waits for the verdict; red, it pushes a fix. See
+# "Repairing a red PR" below for the limits on that.
 #
 # Requirements: gh, git, claude (Claude Code CLI), jq, flock, timeout.
 #
@@ -44,6 +49,10 @@ LOCKFILE="/tmp/claude-autopilot-${REPO//\//__}.lock"
 LOG_FILE="$WORKROOT/poll.log"
 MAX_OPEN_AUTOPILOT_PRS=1                     # never exceed this many unmerged autopilot PRs
 MAX_ISSUES_PER_RUN=1                          # secondary cap on Claude runs per poll
+MAX_REPAIR_ATTEMPTS=3                        # give up fixing a red PR after this many tries
+REBASE_STALE_PR=1                            # rebase a repaired PR if the base branch moved
+STUCK_LABEL="claude-stuck"                   # CI still red after MAX_REPAIR_ATTEMPTS
+NO_AUTOFIX_LABEL="claude-hands-off"          # put this on a PR to stop the repair loop touching it
 ISSUE_FETCH_LIMIT=100                        # how many open issues to consider before filtering
 OLDEST_FIRST=1                               # 1 = work the backlog FIFO, 0 = newest issue first
 CLAUDE_TIMEOUT_SECONDS=1800                  # hard stop on a single Claude run
@@ -105,6 +114,10 @@ else
     --description "Claude is implementing this issue" --force >/dev/null
   gh label create "$FAILED_LABEL" --repo "$REPO" --color B60205 \
     --description "Claude tried and produced no usable change; remove to retry" --force >/dev/null
+  gh label create "$STUCK_LABEL" --repo "$REPO" --color D93F0B \
+    --description "CI still failing after the repair budget; needs a human" --force >/dev/null
+  gh label create "$NO_AUTOFIX_LABEL" --repo "$REPO" --color 0E8A16 \
+    --description "Autopilot will not push repair commits to this PR" --force >/dev/null
 fi
 
 # ---------------------------------------------------------------------------
@@ -126,10 +139,187 @@ OPEN_AUTOPILOT_PRS=$(gh pr list --repo "$REPO" --state open \
   --json number,headRefName --jq '[.[] | select(.headRefName | test("^issue_[0-9]+/"))]')
 OPEN_PR_COUNT=$(echo "$OPEN_AUTOPILOT_PRS" | jq 'length')
 
+# ---------------------------------------------------------------------------
+# Repairing a red PR.
+#
+# The PR is the only place the iOS build is actually compiled and tested, so a
+# failing check is the first real feedback the autopilot gets. Ignoring it would
+# park the queue behind a broken PR indefinitely and waste the one signal worth
+# having, so a poll that finds a red autopilot PR spends its turn fixing it
+# instead of picking up new work.
+#
+# Bounded deliberately: MAX_REPAIR_ATTEMPTS tries, counted from fix(ci): commits
+# already on the branch so the budget survives losing local state. After that
+# the PR is labelled and left for a human. Claude is told not to reach for
+# deleting or weakening a test to get to green, and a no-op response ends the
+# loop rather than repeating it.
+# ---------------------------------------------------------------------------
+repair_pr() {
+  local PR="$1" HEAD_BRANCH="$2"
+  local LABELS CHECKS PENDING FAILING FAIL_COUNT FAIL_NAMES RUN_IDS ATTEMPTS
+  local PR_DIR="$WORKROOT/pr-$PR" REPAIR_LOG="$WORKROOT/pr-$PR.repair.log"
+
+  LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name')
+  if echo "$LABELS" | grep -qx "$NO_AUTOFIX_LABEL"; then
+    log "PR #$PR carries '$NO_AUTOFIX_LABEL' — not touching it."
+    return 0
+  fi
+  if echo "$LABELS" | grep -qx "$STUCK_LABEL"; then
+    log "PR #$PR is '$STUCK_LABEL' — needs a human. Remove the label to re-arm the repair loop."
+    return 0
+  fi
+
+  CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket,link 2>/dev/null || echo '[]')
+  if [ "$(echo "$CHECKS" | jq 'length')" -eq 0 ]; then
+    log "PR #$PR has no checks reported yet — waiting."
+    return 0
+  fi
+
+  PENDING=$(echo "$CHECKS" | jq '[.[] | select(.bucket == "pending")] | length')
+  if [ "$PENDING" -gt 0 ]; then
+    log "PR #$PR has $PENDING check(s) still running — waiting for a verdict."
+    return 0
+  fi
+
+  FAILING=$(echo "$CHECKS" | jq '[.[] | select(.bucket == "fail")]')
+  FAIL_COUNT=$(echo "$FAILING" | jq 'length')
+  if [ "$FAIL_COUNT" -eq 0 ]; then
+    log "PR #$PR is green — waiting on your review."
+    return 0
+  fi
+
+  FAIL_NAMES=$(echo "$FAILING" | jq -r '[.[].name] | join(", ")')
+  log "PR #$PR is red: $FAIL_NAMES"
+
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY RUN — would attempt a repair of PR #$PR."
+    return 0
+  fi
+
+  rm -rf "$PR_DIR"
+  if ! gh repo clone "$REPO" "$PR_DIR" -- --quiet 2>>"$LOG_FILE"; then
+    log "Clone failed while repairing #$PR."
+    return 0
+  fi
+  git -C "$PR_DIR" fetch -q origin "$HEAD_BRANCH" "$DEFAULT_BRANCH"
+  git -C "$PR_DIR" checkout -q -B "$HEAD_BRANCH" "origin/$HEAD_BRANCH"
+
+  # Budget lives in the branch history, not on this machine.
+  ATTEMPTS=$(git -C "$PR_DIR" log "origin/$DEFAULT_BRANCH..HEAD" --grep='^fix(ci):' --oneline | wc -l | tr -d ' ')
+  if [ "$ATTEMPTS" -ge "$MAX_REPAIR_ATTEMPTS" ]; then
+    log "PR #$PR has already had $ATTEMPTS repair attempt(s) — giving up."
+    gh pr edit "$PR" --repo "$REPO" --add-label "$STUCK_LABEL" >/dev/null
+    gh pr comment "$PR" --repo "$REPO" --body \
+      "CI is still failing after $ATTEMPTS automated repair attempt(s) ($FAIL_NAMES). Labelled \`$STUCK_LABEL\` and stopping — this one needs a human. Remove the label to re-arm the repair loop." >/dev/null
+    return 0
+  fi
+  log "Repair attempt $((ATTEMPTS + 1)) of $MAX_REPAIR_ATTEMPTS for PR #$PR."
+
+  # Keep the PR on top of the base branch, same invariant as a fresh PR.
+  if [ "$REBASE_STALE_PR" = "1" ] && [ -n "$(git -C "$PR_DIR" log "HEAD..origin/$DEFAULT_BRANCH" --oneline)" ]; then
+    log "PR #$PR is behind $DEFAULT_BRANCH — rebasing."
+    if git -C "$PR_DIR" rebase -q "origin/$DEFAULT_BRANCH" 2>>"$LOG_FILE"; then
+      if ! git -C "$PR_DIR" push -q --force-with-lease origin "$HEAD_BRANCH" 2>>"$LOG_FILE"; then
+        log "Rebase push rejected for #$PR (branch moved under us) — leaving it for a human."
+        gh pr edit "$PR" --repo "$REPO" --add-label "$STUCK_LABEL" >/dev/null
+        return 0
+      fi
+    else
+      git -C "$PR_DIR" rebase --abort 2>/dev/null || true
+      log "Rebase of #$PR onto $DEFAULT_BRANCH conflicted — labelling stuck."
+      gh pr edit "$PR" --repo "$REPO" --add-label "$STUCK_LABEL" >/dev/null
+      gh pr comment "$PR" --repo "$REPO" --body \
+        "This branch conflicts with \`$DEFAULT_BRANCH\` and I can't rebase it automatically. Labelled \`$STUCK_LABEL\`." >/dev/null
+      return 0
+    fi
+  fi
+
+  # Collect the failing logs. One excerpt per failing run, tail-weighted, since
+  # the actual error is near the end.
+  RUN_IDS=$(echo "$FAILING" | jq -r '.[].link' \
+    | sed -nE 's#.*/actions/runs/([0-9]+).*#\1#p' | sort -u)
+  local FAILURE_TEXT=""
+  for RID in $RUN_IDS; do
+    FAILURE_TEXT="$FAILURE_TEXT
+--- failing output from run $RID ---
+$(gh run view "$RID" --repo "$REPO" --log-failed 2>/dev/null \
+    | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tail -120)"
+  done
+
+  local ISSUE_NUM
+  ISSUE_NUM=$(echo "$HEAD_BRANCH" | sed -nE 's#^issue_([0-9]+)/.*#\1#p')
+
+  local PROMPT
+  PROMPT=$(cat <<EOF
+You are fixing continuous integration on an existing pull request in this repository.
+
+PR #$PR, branch $HEAD_BRANCH, implementing issue #$ISSUE_NUM.
+The working tree is already checked out at the head of that branch.
+
+Failing checks: $FAIL_NAMES
+
+$FAILURE_TEXT
+
+Instructions:
+- Diagnose the failure from the output above and fix the underlying cause.
+- Stay within the scope of this PR. Do not start unrelated work.
+- Do NOT delete, skip, weaken or loosen a test, assertion or timeout to reach green.
+  If the only way to pass is to change what a test asserts, that is a signal the
+  production code is wrong, or that the failure is not yours to fix.
+- If the failure looks pre-existing, environmental or flaky rather than caused by
+  this PR, make no changes and explain that in your final message instead.
+- Do not commit or push — just leave the working tree with the fix applied.
+EOF
+)
+
+  log "Running Claude Code to repair #$PR..."
+  set +e
+  (cd "$PR_DIR" && timeout "$CLAUDE_TIMEOUT_SECONDS" claude -p "$PROMPT" \
+    --allowedTools "$CLAUDE_ALLOWED_TOOLS" \
+    --permission-mode acceptEdits \
+    --output-format text) > "$REPAIR_LOG" 2>&1
+  local RC=$?
+  set -e
+
+  if [ $RC -ne 0 ]; then
+    log "Repair run failed for #$PR (exit $RC). See $REPAIR_LOG"
+    return 0
+  fi
+
+  if [ -z "$(git -C "$PR_DIR" status --porcelain)" ]; then
+    log "Repair produced no changes for #$PR — Claude likely judged the failure not its own."
+    gh pr edit "$PR" --repo "$REPO" --add-label "$STUCK_LABEL" >/dev/null
+    gh pr comment "$PR" --repo "$REPO" --body \
+      "I looked at the failing check(s) — $FAIL_NAMES — and did not change anything, which usually means the failure looks pre-existing, environmental or flaky rather than caused by this PR. Labelled \`$STUCK_LABEL\` so the queue doesn't spin. Repair reasoning is in \`$REPAIR_LOG\` on the runner." >/dev/null
+    return 0
+  fi
+
+  git -C "$PR_DIR" add -A
+  git -C "$PR_DIR" \
+    -c "user.name=$COMMIT_NAME" -c "user.email=$COMMIT_EMAIL" \
+    commit -q -m "fix(ci): repair failing checks on #$PR" \
+    -m "Attempt $((ATTEMPTS + 1)) of $MAX_REPAIR_ATTEMPTS. Failing: $FAIL_NAMES"
+
+  if ! git -C "$PR_DIR" push -q origin "$HEAD_BRANCH" 2>>"$LOG_FILE"; then
+    log "Could not push repair for #$PR."
+    return 0
+  fi
+
+  gh pr comment "$PR" --repo "$REPO" --body \
+    "Pushed an automated fix for the failing check(s): $FAIL_NAMES. Attempt $((ATTEMPTS + 1)) of $MAX_REPAIR_ATTEMPTS — after that I stop and label this \`$STUCK_LABEL\`." >/dev/null
+  log "Pushed repair attempt $((ATTEMPTS + 1)) for #$PR."
+}
+
 if [ "$OPEN_PR_COUNT" -ge "$MAX_OPEN_AUTOPILOT_PRS" ]; then
   BLOCKING=$(echo "$OPEN_AUTOPILOT_PRS" | jq -r '[.[] | "#\(.number) (\(.headRefName))"] | join(", ")')
   log "$OPEN_PR_COUNT unmerged autopilot PR(s) already open: $BLOCKING"
-  log "Limit is $MAX_OPEN_AUTOPILOT_PRS — merge or close before the next issue is picked up."
+  log "Limit is $MAX_OPEN_AUTOPILOT_PRS — no new issues this tick."
+
+  while read -r pr; do
+    [ -n "$pr" ] || continue
+    repair_pr "$(echo "$pr" | jq -r '.number')" "$(echo "$pr" | jq -r '.headRefName')"
+  done < <(echo "$OPEN_AUTOPILOT_PRS" | jq -c '.[]')
+
   log "=== Poll end (processed 0 issue(s)) ==="
   exit 0
 fi
@@ -360,4 +550,8 @@ log "=== Poll end (processed $PROCESSED issue(s)) ==="
 # point of the queue limit, not a fault. If a PR is closed unmerged and you
 # don't want that issue attempted again, leave its branch in place; deleting the
 # branch while the issue is still open makes it eligible once more.
+#
+# Stopping the repair loop on one PR: label it claude-hands-off. A PR that ran
+# out of repair attempts, or that Claude declined to change, gets claude-stuck;
+# remove that label to give it another MAX_REPAIR_ATTEMPTS.
 # ---------------------------------------------------------------------------
