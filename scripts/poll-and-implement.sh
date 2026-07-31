@@ -17,11 +17,15 @@
 # which combined with the queue limit means every generated PR is written
 # against a main that already contains the previous one.
 #
-# While a PR is open the poller does not start new work, but it is not idle: if
-# that PR's checks have failed it spends the tick repairing them, because the PR
-# is the only place the code is really compiled and tested. Green, it waits for
-# review; still running, it waits for the verdict; red, it pushes a fix. See
-# "Repairing a red PR" below for the limits on that.
+# While a PR is open the poller does not start new work, but it is not idle. The
+# PR is the only place the code is really compiled and tested, so its checks are
+# the signal the whole loop turns on: still running, wait for the verdict; red,
+# push a fix; green and clean, merge it and carry straight on to the next issue
+# in the same tick. See "Repairing a red PR" and "Merging a green PR" below for
+# the limits on both.
+#
+# Left alone throughout: drafts, PRs with changes requested, and anything
+# labelled claude-hands-off.
 #
 # Requirements: gh, git, claude (Claude Code CLI), jq, flock, timeout.
 #
@@ -32,6 +36,28 @@
 #   GH_TOKEN                  a PAT with 'repo' scope
 
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Run from a private copy of this file.
+#
+# bash reads a script lazily, seeking by byte offset as it goes, so editing this
+# file while a run is in flight makes that run resume at the wrong place in
+# changed content. A poll can sit inside a Claude invocation for half an hour,
+# which makes the overlap between "editing the script" and "the script is
+# running" much wider than it looks. Copying and re-execing costs nothing and
+# removes the hazard entirely.
+#
+# The copy is unlinked immediately after exec: the kernel keeps its contents
+# alive behind bash's open descriptor, so the run is unaffected and nothing is
+# left in /tmp even if the run is killed.
+# ---------------------------------------------------------------------------
+if [ -z "${AUTOPILOT_SELF_COPY:-}" ]; then
+  AUTOPILOT_SELF_COPY=$(mktemp "${TMPDIR:-/tmp}/autopilot-self.XXXXXX")
+  export AUTOPILOT_SELF_COPY
+  cat "$0" > "$AUTOPILOT_SELF_COPY"
+  exec bash "$AUTOPILOT_SELF_COPY" "$@"
+fi
+rm -f "$AUTOPILOT_SELF_COPY"
 
 # ---------------------------------------------------------------------------
 # Config — edit these for your setup
@@ -50,6 +76,9 @@ LOG_FILE="$WORKROOT/poll.log"
 MAX_OPEN_AUTOPILOT_PRS=1                     # never exceed this many unmerged autopilot PRs
 MAX_ISSUES_PER_RUN=1                          # secondary cap on Claude runs per poll
 MAX_REPAIR_ATTEMPTS=3                        # give up fixing a red PR after this many tries
+AUTO_MERGE=1                                 # merge an autopilot PR once it is green and clean
+MERGE_METHOD="squash"                        # squash|merge|rebase — must be enabled on the repo
+DELETE_BRANCH_ON_MERGE=0                     # keeping the branch is what stops the issue being redone
 REBASE_STALE_PR=1                            # rebase a repaired PR if the base branch moved
 STUCK_LABEL="claude-stuck"                   # CI still red after MAX_REPAIR_ATTEMPTS
 NO_AUTOFIX_LABEL="claude-hands-off"          # put this on a PR to stop the repair loop touching it
@@ -154,6 +183,98 @@ OPEN_PR_COUNT=$(echo "$OPEN_AUTOPILOT_PRS" | jq 'length')
 # deleting or weakening a test to get to green, and a no-op response ends the
 # loop rather than repeating it.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Merging a green PR.
+#
+# Called only once every check has reported and none of them failed. The check
+# verdict is not sufficient on its own: GitHub's own mergeStateStatus is what
+# knows about conflicts, required reviews and out-of-date branches, so that is
+# the thing consulted before merging rather than the check buckets alone.
+#
+# The branch is deliberately left behind. It is the marker that stops the issue
+# being implemented a second time, and it costs nothing to keep.
+# ---------------------------------------------------------------------------
+merge_pr() {
+  local PR="$1" HEAD_BRANCH="$2"
+  local STATE DRAFT MERGEABLE STATUS REVIEW
+
+  if [ "$AUTO_MERGE" != "1" ]; then
+    log "PR #$PR is green — auto-merge is off, leaving it for you."
+    return 0
+  fi
+
+  STATE=$(gh pr view "$PR" --repo "$REPO" \
+    --json isDraft,mergeable,mergeStateStatus,reviewDecision)
+  DRAFT=$(echo "$STATE" | jq -r '.isDraft')
+  MERGEABLE=$(echo "$STATE" | jq -r '.mergeable')
+  STATUS=$(echo "$STATE" | jq -r '.mergeStateStatus')
+  REVIEW=$(echo "$STATE" | jq -r '.reviewDecision // ""')
+
+  if [ "$DRAFT" = "true" ]; then
+    log "PR #$PR is green but still a draft — leaving it."
+    return 0
+  fi
+
+  if [ "$REVIEW" = "CHANGES_REQUESTED" ]; then
+    log "PR #$PR is green but has changes requested — leaving it for you."
+    return 0
+  fi
+
+  if [ "$MERGEABLE" = "CONFLICTING" ] || [ "$STATUS" = "DIRTY" ]; then
+    log "PR #$PR conflicts with $DEFAULT_BRANCH — labelling stuck."
+    gh pr edit "$PR" --repo "$REPO" --add-label "$STUCK_LABEL" >/dev/null
+    gh pr comment "$PR" --repo "$REPO" --body \
+      "Checks are green but this branch conflicts with \`$DEFAULT_BRANCH\`, so I can't merge it. Labelled \`$STUCK_LABEL\`." >/dev/null
+    return 0
+  fi
+
+  case "$STATUS" in
+    CLEAN|HAS_HOOKS)
+      : # good to go
+      ;;
+    BEHIND)
+      # Required "branch up to date" rule. Rebasing re-triggers CI, so merging
+      # waits for the next tick rather than forcing it now.
+      log "PR #$PR is green but behind $DEFAULT_BRANCH — updating it."
+      if gh pr update-branch "$PR" --repo "$REPO" --rebase >/dev/null 2>&1 \
+        || gh pr update-branch "$PR" --repo "$REPO" >/dev/null 2>&1; then
+        log "PR #$PR updated; will merge once its checks re-report."
+      else
+        log "Could not update PR #$PR against $DEFAULT_BRANCH."
+      fi
+      return 0
+      ;;
+    BLOCKED)
+      log "PR #$PR is green but GitHub reports it blocked (review or a required check not satisfied) — leaving it."
+      return 0
+      ;;
+    UNKNOWN)
+      log "PR #$PR mergeability not computed yet — will retry next tick."
+      return 0
+      ;;
+    *)
+      log "PR #$PR is green but in state '$STATUS' — not merging."
+      return 0
+      ;;
+  esac
+
+  if [ "$DRY_RUN" = "1" ]; then
+    log "DRY RUN — would $MERGE_METHOD-merge PR #$PR."
+    return 0
+  fi
+
+  local MERGE_ARGS=(--repo "$REPO" "--$MERGE_METHOD")
+  [ "$DELETE_BRANCH_ON_MERGE" = "1" ] && MERGE_ARGS+=(--delete-branch)
+
+  if gh pr merge "$PR" "${MERGE_ARGS[@]}" >/dev/null 2>>"$LOG_FILE"; then
+    log "Merged PR #$PR into $DEFAULT_BRANCH."
+    return 0
+  fi
+
+  log "Merge of PR #$PR was rejected — see $LOG_FILE."
+  return 0
+}
+
 repair_pr() {
   local PR="$1" HEAD_BRANCH="$2"
   local LABELS CHECKS PENDING FAILING FAIL_COUNT FAIL_NAMES RUN_IDS ATTEMPTS
@@ -184,7 +305,7 @@ repair_pr() {
   FAILING=$(echo "$CHECKS" | jq '[.[] | select(.bucket == "fail")]')
   FAIL_COUNT=$(echo "$FAILING" | jq 'length')
   if [ "$FAIL_COUNT" -eq 0 ]; then
-    log "PR #$PR is green — waiting on your review."
+    merge_pr "$PR" "$HEAD_BRANCH"
     return 0
   fi
 
@@ -320,8 +441,17 @@ if [ "$OPEN_PR_COUNT" -ge "$MAX_OPEN_AUTOPILOT_PRS" ]; then
     repair_pr "$(echo "$pr" | jq -r '.number')" "$(echo "$pr" | jq -r '.headRefName')"
   done < <(echo "$OPEN_AUTOPILOT_PRS" | jq -c '.[]')
 
-  log "=== Poll end (processed 0 issue(s)) ==="
-  exit 0
+  # A merge just above may have freed the slot. Re-ask rather than idling until
+  # the next tick, so a merge and the next issue can happen in one pass.
+  OPEN_AUTOPILOT_PRS=$(gh pr list --repo "$REPO" --state open \
+    --json number,headRefName --jq '[.[] | select(.headRefName | test("^issue_[0-9]+/"))]')
+  OPEN_PR_COUNT=$(echo "$OPEN_AUTOPILOT_PRS" | jq 'length')
+
+  if [ "$OPEN_PR_COUNT" -ge "$MAX_OPEN_AUTOPILOT_PRS" ]; then
+    log "=== Poll end (processed 0 issue(s)) ==="
+    exit 0
+  fi
+  log "Queue is clear again — carrying on to new work in this same tick."
 fi
 
 PR_BUDGET=$((MAX_OPEN_AUTOPILOT_PRS - OPEN_PR_COUNT))
