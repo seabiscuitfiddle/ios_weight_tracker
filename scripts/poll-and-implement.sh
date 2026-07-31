@@ -12,6 +12,12 @@
 # The branch this script pushes matches that pattern, so a successful run
 # excludes itself from the next poll.
 #
+# Queue rule: at most MAX_OPEN_AUTOPILOT_PRS unmerged autopilot PRs exist at any
+# time (default 1). While one is open the poller does nothing, so merging that
+# PR is what releases the next issue. Each branch is cut fresh from the tip of
+# the default branch, which combined with the queue limit means every generated
+# PR is written against a main that already contains the previous one.
+#
 # Requirements: gh, git, claude (Claude Code CLI), jq, flock, timeout.
 #
 # Both CLIs must authenticate without a desktop session, because cron has none.
@@ -36,8 +42,10 @@ FAILED_LABEL="claude-failed"                 # applied on error / no changes; al
 WORKROOT="${WORKROOT:-$HOME/.claude-autopilot/${REPO//\//__}}"
 LOCKFILE="/tmp/claude-autopilot-${REPO//\//__}.lock"
 LOG_FILE="$WORKROOT/poll.log"
-MAX_ISSUES_PER_RUN=3                         # cap so one poll can't blow up your API spend
+MAX_OPEN_AUTOPILOT_PRS=1                     # never exceed this many unmerged autopilot PRs
+MAX_ISSUES_PER_RUN=1                          # secondary cap on Claude runs per poll
 ISSUE_FETCH_LIMIT=100                        # how many open issues to consider before filtering
+OLDEST_FIRST=1                               # 1 = work the backlog FIFO, 0 = newest issue first
 CLAUDE_TIMEOUT_SECONDS=1800                  # hard stop on a single Claude run
 CLAUDE_ALLOWED_TOOLS="Bash,Read,Edit,Write,Glob,Grep"
 COMMIT_NAME="claude-autopilot"
@@ -73,6 +81,35 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# One unmerged autopilot PR at a time.
+#
+# Every PR is cut from the tip of the default branch at clone time, so holding
+# the queue to one open PR is what makes that meaningful: the next issue is
+# implemented against a main that already contains the previous one, instead of
+# a pile of PRs that were all written against the same stale commit and then
+# conflict with each other on merge.
+#
+# "Autopilot PR" means an open PR whose head branch matches issue_<number>/.
+# PRs you raise by hand don't count against the budget.
+# ---------------------------------------------------------------------------
+DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef --jq '.defaultBranchRef.name')
+log "Default branch is '$DEFAULT_BRANCH'."
+
+OPEN_AUTOPILOT_PRS=$(gh pr list --repo "$REPO" --state open \
+  --json number,headRefName --jq '[.[] | select(.headRefName | test("^issue_[0-9]+/"))]')
+OPEN_PR_COUNT=$(echo "$OPEN_AUTOPILOT_PRS" | jq 'length')
+
+if [ "$OPEN_PR_COUNT" -ge "$MAX_OPEN_AUTOPILOT_PRS" ]; then
+  BLOCKING=$(echo "$OPEN_AUTOPILOT_PRS" | jq -r '[.[] | "#\(.number) (\(.headRefName))"] | join(", ")')
+  log "$OPEN_PR_COUNT unmerged autopilot PR(s) already open: $BLOCKING"
+  log "Limit is $MAX_OPEN_AUTOPILOT_PRS — merge or close before the next issue is picked up."
+  log "=== Poll end (processed 0 issue(s)) ==="
+  exit 0
+fi
+
+PR_BUDGET=$((MAX_OPEN_AUTOPILOT_PRS - OPEN_PR_COUNT))
+
+# ---------------------------------------------------------------------------
 # Snapshot remote branches once per run; used for the issue_<num>/ dedup check.
 # ---------------------------------------------------------------------------
 REMOTE_BRANCHES=$(gh api "repos/$REPO/branches" --paginate --jq '.[].name')
@@ -100,8 +137,12 @@ ISSUES_JSON=$(gh issue list \
   --json number,title,body,author,labels \
   --limit "$ISSUE_FETCH_LIMIT")
 
+if [ "$OLDEST_FIRST" = "1" ]; then
+  ISSUES_JSON=$(echo "$ISSUES_JSON" | jq 'sort_by(.number)')
+fi
+
 TOTAL=$(echo "$ISSUES_JSON" | jq 'length')
-log "Fetched $TOTAL open issue(s) by $TRUSTED_AUTHOR."
+log "Fetched $TOTAL open issue(s) by $TRUSTED_AUTHOR. Room for $PR_BUDGET more open PR(s)."
 
 PROCESSED=0
 
@@ -133,6 +174,11 @@ while read -r issue; do
 
   if has_branch_for_issue "$NUM"; then
     log "Skipping #$NUM — a branch 'issue_$NUM/...' already exists."
+    continue
+  fi
+
+  if [ "$PR_BUDGET" -le 0 ]; then
+    log "Open-PR budget spent — leaving #$NUM for a later poll."
     continue
   fi
 
@@ -171,7 +217,17 @@ while read -r issue; do
     continue
   fi
 
-  git -C "$ISSUE_DIR" checkout -q -b "$BRANCH"
+  # Branch from the remote tip explicitly rather than from whatever the clone
+  # left checked out, so the base is unambiguous even if the clone is stale or
+  # the default branch moved between the clone and here.
+  git -C "$ISSUE_DIR" fetch -q origin "$DEFAULT_BRANCH"
+  if ! git -C "$ISSUE_DIR" checkout -q -b "$BRANCH" "origin/$DEFAULT_BRANCH"; then
+    log "Could not branch from origin/$DEFAULT_BRANCH for #$NUM — marking failed."
+    fail_issue
+    continue
+  fi
+  BASE_SHA=$(git -C "$ISSUE_DIR" rev-parse --short HEAD)
+  log "#$NUM branching from $DEFAULT_BRANCH @ $BASE_SHA"
 
   PROMPT=$(cat <<EOF
 You are implementing GitHub issue #$NUM in this repository.
@@ -238,11 +294,15 @@ $BRANCH"
   gh pr create \
     --repo "$REPO" \
     --title "Implement: $TITLE" \
-    --body "Closes #$NUM. Automatically implemented by a local Claude Code instance from this issue. Please review before merging." \
+    --body "Closes #$NUM. Automatically implemented by a local Claude Code instance from this issue, branched from \`$DEFAULT_BRANCH\` at \`$BASE_SHA\`. Please review before merging.
+
+No further issues will be picked up until this PR is merged or closed." \
+    --base "$DEFAULT_BRANCH" \
     --head "$BRANCH" >/dev/null
 
+  PR_BUDGET=$((PR_BUDGET - 1))
   gh issue edit "$NUM" --repo "$REPO" --remove-label "$IN_PROGRESS_LABEL" >/dev/null
-  log "PR opened for #$NUM on branch $BRANCH."
+  log "PR opened for #$NUM on branch $BRANCH (base $DEFAULT_BRANCH @ $BASE_SHA)."
 done < <(echo "$ISSUES_JSON" | jq -c '.[]')
 
 log "=== Poll end (processed $PROCESSED issue(s)) ==="
@@ -270,4 +330,9 @@ log "=== Poll end (processed $PROCESSED issue(s)) ==="
 #
 # Retrying an issue: remove the claude-failed label. Re-running an issue that
 # already has a PR: delete the issue_<number>/... branch first.
+#
+# Nothing new will be picked up while an autopilot PR is open — that is the
+# point of the queue limit, not a fault. If a PR is closed unmerged and you
+# don't want that issue attempted again, leave its branch in place; deleting the
+# branch while the issue is still open makes it eligible once more.
 # ---------------------------------------------------------------------------
