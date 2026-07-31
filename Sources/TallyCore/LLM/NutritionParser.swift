@@ -30,6 +30,14 @@ public enum ParseInput: Hashable, Sendable {
 public struct ParsedItem: Hashable, Sendable {
     public var kind: Entry.Kind
     public var label: String
+    /// The slice of the user's own words this item came from — "sourdough toast with butter" out
+    /// of "two eggs, sourdough toast with butter and a coffee".
+    ///
+    /// One log is usually several things, and each one is corrected on its own afterwards. Giving
+    /// every entry the whole sentence means anyone clarifying the toast has to read past the eggs
+    /// and the coffee to find it, and re-describing it re-logs them both. Nil when there are no
+    /// words behind the item — a photo — or when the provider ignored the field.
+    public var sourceText: String?
     public var calories: Int
     public var proteinGrams: Double
     public var fiberGrams: Double
@@ -40,6 +48,7 @@ public struct ParsedItem: Hashable, Sendable {
     public init(
         kind: Entry.Kind,
         label: String,
+        sourceText: String? = nil,
         calories: Int,
         proteinGrams: Double = 0,
         fiberGrams: Double = 0,
@@ -49,6 +58,7 @@ public struct ParsedItem: Hashable, Sendable {
     ) {
         self.kind = kind
         self.label = label
+        self.sourceText = sourceText
         self.calories = calories
         self.proteinGrams = proteinGrams
         self.fiberGrams = fiberGrams
@@ -58,6 +68,10 @@ public struct ParsedItem: Hashable, Sendable {
     }
 
     /// Turns the proposal into a storable entry.
+    ///
+    /// - Parameter rawInput: what was said for the request as a whole. Only used when this item
+    ///   has no ``sourceText`` of its own, so an entry is captioned with its own words wherever
+    ///   the parser could name them and with the whole description otherwise.
     public func entry(
         on day: Day,
         loggedAt: Date,
@@ -76,7 +90,7 @@ public struct ParsedItem: Hashable, Sendable {
             loggedAt: loggedAt,
             day: day,
             source: source,
-            rawInput: rawInput,
+            rawInput: sourceText ?? rawInput,
             confidence: confidence,
             calendar: calendar
         )

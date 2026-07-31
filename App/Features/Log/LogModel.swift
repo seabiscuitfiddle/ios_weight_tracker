@@ -72,6 +72,9 @@ final class LogModel {
         do {
             let result = try await parser.parse(input, context: context)
             let now = Date()
+            // One send is usually several things, and each becomes a card that is corrected on
+            // its own — so each carries the part of the description it came from. The whole
+            // transcript is only the fallback, for a photo or a parser that named no fragment.
             let entries = result.items.map {
                 $0.entry(
                     on: day,

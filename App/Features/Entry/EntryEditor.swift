@@ -35,8 +35,10 @@ final class EntryEditorModel {
         self.text = Self.startingText(for: entry)
     }
 
-    /// The user's own words when there were any. A photo entry only carries whatever note was
-    /// typed alongside it, so the parser's label stands in.
+    /// The user's own words when there were any — this entry's share of them, not the whole
+    /// send, so clarifying the toast doesn't mean reading past the eggs and the coffee to find
+    /// it. A photo entry only carries whatever note was typed alongside it, so the parser's
+    /// label stands in.
     private static func startingText(for entry: Entry) -> String {
         let raw = entry.rawInput?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return raw.isEmpty ? entry.label : raw
@@ -78,6 +80,9 @@ final class EntryEditorModel {
             // The entry keeps its id, its day and its timestamp: this is a correction to an
             // existing record, and letting it jump to today or to the bottom of the list would
             // make fixing a typo look like logging a second meal.
+            //
+            // A rewrite that turns out to be two things splits the same way a fresh log does,
+            // each replacement keeping the words it came from rather than all of them.
             var replacements = result.items.map {
                 $0.entry(
                     on: original.day,

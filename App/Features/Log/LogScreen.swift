@@ -410,16 +410,20 @@ struct SavedEntryCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Metrics.space2 + 2) {
                 VStack(alignment: .leading, spacing: 2) {
-                    // The user's own words, quoted back. Showing what was heard is what makes an
-                    // estimate judgeable — a number alone can't be checked.
-                    if let raw = entry.rawInput {
-                        Text("“\(raw)”")
+                    // The user's own words for this one item, quoted back. Showing what was heard
+                    // is what makes an estimate judgeable — a number alone can't be checked.
+                    if let quoted = quotedInput {
+                        Text("“\(quoted)”")
+                            .font(.tallyScaled(14, weight: .regular))
+                            .foregroundStyle(Color.tallyText)
+                        Text(entry.label)
+                            .font(.tallyEntryDetail)
+                            .foregroundStyle(Color.tallySecondaryText)
+                    } else {
+                        Text(entry.label)
                             .font(.tallyScaled(14, weight: .regular))
                             .foregroundStyle(Color.tallyText)
                     }
-                    Text(entry.label)
-                        .font(.tallyEntryDetail)
-                        .foregroundStyle(Color.tallySecondaryText)
                 }
 
                 Spacer(minLength: Metrics.space2)
@@ -470,6 +474,18 @@ struct SavedEntryCard: View {
         }
         .background(Color.tallySurface)
         .tallyHairlineBorder()
+    }
+
+    /// The words behind this entry, when they say something its label doesn't.
+    ///
+    /// Each card now carries only the fragment it came from, so "a black coffee" sits above
+    /// "Black coffee" often enough to matter — two lines saying one thing read as a rendering
+    /// mistake. Nothing is lost by dropping the quote in that case; the label is the same words.
+    private var quotedInput: String? {
+        guard let raw = entry.rawInput?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty, raw.caseInsensitiveCompare(entry.label) != .orderedSame
+        else { return nil }
+        return raw
     }
 
     @ViewBuilder

@@ -122,6 +122,35 @@ struct ParseRequestTests {
         #expect(schema["required"] as? [String] == ["items", "note"])
     }
 
+    /// Each item becomes a card that is edited on its own, so each has to arrive with its own
+    /// words. Leaving this out of the schema is what puts the whole sentence back on every card.
+    @Test("requires the words behind each item")
+    func schemaAsksForPerItemWords() async throws {
+        let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
+        _ = try? await makeParser(transport).parse(.text("eggs, toast and coffee"))
+
+        let body = try #require(transport.lastBody)
+        let format = try #require(
+            (body["output_config"] as? [String: Any])?["format"] as? [String: Any]
+        )
+        let schema = try #require(format["schema"] as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let items = try #require(properties["items"] as? [String: Any])
+        let item = try #require(items["items"] as? [String: Any])
+        let fields = try #require(item["properties"] as? [String: Any])
+
+        #expect(fields["sourceText"] != nil)
+        #expect((item["required"] as? [String])?.contains("sourceText") == true)
+    }
+
+    /// The instruction is what makes the fragments fragments; without it a model happily copies
+    /// the whole description into all three.
+    @Test("tells the model to split the description across the items")
+    func promptAsksForFragments() {
+        #expect(ParsePrompt.system.contains("sourceText"))
+        #expect(ParsePrompt.system.contains("never the whole sentence"))
+    }
+
     @Test("puts the user's words in the message content")
     func includesUserText() async throws {
         let transport = StubTransport(json: messagesEnvelope(#"{"items":[],"note":""}"#))
@@ -413,16 +442,22 @@ struct ParseResponseTests {
         #expect(result.note == "Assumed an easy pace.")
     }
 
-    @Test("decodes several items from one description")
+    /// Three things said in one breath are three rows to correct separately, and each one keeps
+    /// the words it came from — the point of the split, since an entry captioned with the whole
+    /// sentence makes clarifying the toast a matter of reading past the eggs and the coffee.
+    @Test("decodes several items from one description, each with its own words")
     func multipleItems() async throws {
         let transport = StubTransport(json: messagesEnvelope("""
             {"items":[
-              {"kind":"food","label":"Scrambled eggs","calories":180,"proteinGrams":12,
+              {"kind":"food","label":"Scrambled eggs","sourceText":"two scrambled eggs",
+               "calories":180,"proteinGrams":12,
                "fiberGrams":0,"exerciseKind":"none","durationMinutes":0,"confidence":"high"},
-              {"kind":"food","label":"Sourdough toast with butter","calories":160,
+              {"kind":"food","label":"Sourdough toast with butter",
+               "sourceText":"sourdough toast with butter","calories":160,
                "proteinGrams":5,"fiberGrams":2,"exerciseKind":"none","durationMinutes":0,
                "confidence":"medium"},
-              {"kind":"food","label":"Black coffee","calories":5,"proteinGrams":0,
+              {"kind":"food","label":"Black coffee","sourceText":"black coffee","calories":5,
+               "proteinGrams":0,
                "fiberGrams":0,"exerciseKind":"none","durationMinutes":0,"confidence":"high"}
             ],"note":"Assumed two eggs and one slice."}
             """))
@@ -432,7 +467,42 @@ struct ParseResponseTests {
 
         #expect(result.items.count == 3)
         #expect(result.items.map(\.calories) == [180, 160, 5])
+        #expect(result.items.compactMap(\.sourceText) == [
+            "two scrambled eggs", "sourdough toast with butter", "black coffee",
+        ])
         #expect(result.note == "Assumed two eggs and one slice.")
+    }
+
+    /// Only one of the three structured-output styles enforces the schema, and a photo has no
+    /// words behind it at all. Both arrive as nothing rather than as an empty quotation, so the
+    /// caller can fall back to the whole description.
+    @Test("treats missing or blank words behind an item as none", arguments: [
+        #"{"kind":"food","label":"Rice","calories":200,"proteinGrams":4,"fiberGrams":1,"exerciseKind":"none","durationMinutes":0,"confidence":"high"}"#,
+        #"{"kind":"food","label":"Rice","sourceText":"   ","calories":200,"proteinGrams":4,"fiberGrams":1,"exerciseKind":"none","durationMinutes":0,"confidence":"high"}"#,
+    ])
+    func absentSourceText(_ item: String) async throws {
+        let transport = StubTransport(json: messagesEnvelope(#"{"items":[\#(item)],"note":""}"#))
+
+        let parsed = try #require(
+            try await makeParser(transport).parse(.text("rice")).items.first
+        )
+        #expect(parsed.sourceText == nil)
+    }
+
+    /// Surrounding whitespace is a model artefact, and it would show up inside the quotation
+    /// marks on the card and in the edit box underneath them.
+    @Test("trims the words behind an item")
+    func trimsSourceText() async throws {
+        let transport = StubTransport(json: messagesEnvelope("""
+            {"items":[{"kind":"food","label":"Rice","sourceText":"  a bowl of rice\\n",
+            "calories":200,"proteinGrams":4,"fiberGrams":1,"exerciseKind":"none",
+            "durationMinutes":0,"confidence":"high"}],"note":""}
+            """))
+
+        let item = try #require(
+            try await makeParser(transport).parse(.text("a bowl of rice")).items.first
+        )
+        #expect(item.sourceText == "a bowl of rice")
     }
 
     /// Exercise carries no macros. Letting a stray value through would inflate the protein bar
@@ -777,5 +847,38 @@ struct ParsedItemConversionTests {
         #expect(entry.signedCalories == -320)
         #expect(entry.exerciseKind == .cardio)
         #expect(entry.durationMinutes == 38)
+    }
+
+    /// The whole description is the fallback, not the caption: an entry that knows which words
+    /// are its own keeps those, so the edit box opens on one thing rather than on all three.
+    @Test("an entry keeps its own words rather than the whole description")
+    func entryPrefersItemWords() {
+        let items = [
+            ParsedItem(kind: .food, label: "Scrambled eggs", sourceText: "two eggs", calories: 180),
+            ParsedItem(kind: .food, label: "Sourdough toast", sourceText: "toast", calories: 160),
+        ]
+
+        let entries = items.map {
+            $0.entry(
+                on: Day(year: 2026, month: 7, day: 23), loggedAt: Date(),
+                source: .llmText, rawInput: "two eggs and toast"
+            )
+        }
+
+        #expect(entries.compactMap(\.rawInput) == ["two eggs", "toast"])
+    }
+
+    /// A photo has no words behind any one item, and a provider that ignores the schema names
+    /// none. Both keep today's behaviour: whatever was said stands for the whole send.
+    @Test("falls back to the whole description when the item names no words")
+    func entryFallsBackToWholeInput() {
+        let item = ParsedItem(kind: .food, label: "Chicken bowl", calories: 640)
+
+        let entry = item.entry(
+            on: Day(year: 2026, month: 7, day: 23), loggedAt: Date(),
+            source: .llmPhoto, rawInput: "half of it was left over"
+        )
+
+        #expect(entry.rawInput == "half of it was left over")
     }
 }

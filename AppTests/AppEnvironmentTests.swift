@@ -183,6 +183,8 @@ struct LogModelTests {
         #expect(try stores.entries.entries(on: Day.today()).count == 1)
     }
 
+    /// The parser named no fragment here, so the whole description stands for the send — which
+    /// is exactly right when it produced one entry.
     @Test("keeps the user's own words on the saved entry")
     func retainsTranscript() async throws {
         let stores = StoreBundle.inMemory()
@@ -192,6 +194,47 @@ struct LogModelTests {
 
         #expect(model.justAdded.first?.rawInput == "two eggs and toast")
         #expect(model.justAdded.first?.source == .llmText)
+    }
+
+    /// Logging is almost always several things at once. Each card is corrected on its own, so
+    /// each carries only the words it came from — captioning all three with the whole sentence
+    /// makes clarifying the toast a matter of re-reading the eggs and the coffee.
+    @Test("gives each entry only the part of the description it came from")
+    func splitsDescriptionAcrossEntries() async throws {
+        let stores = StoreBundle.inMemory()
+        let parser = StubNutritionParser(result: ParseResult(items: [
+            ParsedItem(kind: .food, label: "Scrambled eggs", sourceText: "two eggs",
+                       calories: 180, proteinGrams: 12),
+            ParsedItem(kind: .food, label: "Sourdough toast", sourceText: "toast",
+                       calories: 160, proteinGrams: 5),
+            ParsedItem(kind: .food, label: "Black coffee", sourceText: "a black coffee",
+                       calories: 5),
+        ]))
+        let model = LogModel(stores: stores, parser: parser)
+
+        await model.log(text: "two eggs, toast and a black coffee")
+
+        #expect(model.justAdded.count == 3)
+        #expect(
+            model.justAdded.compactMap(\.rawInput) == ["two eggs", "toast", "a black coffee"]
+        )
+        #expect(try stores.entries.entries(on: Day.today()).count == 3)
+    }
+
+    /// A photo's items have no words of their own, so whatever note was typed alongside it
+    /// stands for all of them rather than leaving the cards blank.
+    @Test("falls back to the note when a photo's items name no words")
+    func photoItemsFallBackToTheNote() async throws {
+        let stores = StoreBundle.inMemory()
+        let parser = StubNutritionParser(result: ParseResult(items: [
+            ParsedItem(kind: .food, label: "Chicken bowl", calories: 640),
+        ]))
+        let model = LogModel(stores: stores, parser: parser)
+
+        await model.log(image: Data([0x01]), mediaType: .jpeg, note: "half of it was left over")
+
+        #expect(model.justAdded.first?.rawInput == "half of it was left over")
+        #expect(model.justAdded.first?.source == .llmPhoto)
     }
 
     /// A failure has to be actionable: the message the user sees, and whether the UI should
@@ -282,7 +325,7 @@ struct EntryEditorModelTests {
         )
     }
 
-    @Test("seeds the field with the words that produced the entry")
+    @Test("seeds the field with the words that produced this entry")
     func seedsFromRawInput() {
         let model = EntryEditorModel(
             entry: Self.logged(), stores: .inMemory(), parser: StubNutritionParser()
@@ -351,6 +394,37 @@ struct EntryEditorModelTests {
         #expect(onDay.count == 2)
         #expect(onDay.contains { $0.id == entry.id })
         #expect(onDay.allSatisfy { $0.day == Self.pastDay })
+    }
+
+    /// The whole point of splitting a send across entries: correcting the toast opens on the
+    /// toast, re-parses the toast, and leaves the eggs and the coffee untouched. Seeded with all
+    /// three, the same edit would re-log the two that were already right.
+    @Test("correcting one entry of a multi-item log leaves its siblings alone")
+    func correctsOneOfSeveral() async throws {
+        let eggs = Self.logged(rawInput: "two eggs", label: "Scrambled eggs")
+        let toast = Self.logged(rawInput: "toast", label: "Sourdough toast")
+        let coffee = Self.logged(rawInput: "a black coffee", label: "Black coffee")
+        let stores = StoreBundle.inMemory(entries: [eggs, toast, coffee])
+        let parser = StubNutritionParser(result: ParseResult(items: [
+            ParsedItem(kind: .food, label: "Sourdough toast with butter",
+                       sourceText: "two slices of toast with butter", calories: 260),
+        ]))
+        let model = EntryEditorModel(entry: toast, stores: stores, parser: parser)
+
+        // The box opens on this entry's words alone, not on the whole breakfast.
+        #expect(model.text == "toast")
+
+        model.text = "two slices of toast with butter"
+        #expect(await model.save())
+
+        let onDay = try stores.entries.entries(on: Self.pastDay)
+        #expect(onDay.count == 3)
+        #expect(onDay.first { $0.id == eggs.id }?.label == "Scrambled eggs")
+        #expect(onDay.first { $0.id == coffee.id }?.label == "Black coffee")
+
+        let corrected = try #require(onDay.first { $0.id == toast.id })
+        #expect(corrected.label == "Sourdough toast with butter")
+        #expect(corrected.rawInput == "two slices of toast with butter")
     }
 
     @Test("a parser failure leaves the entry exactly as it was")
