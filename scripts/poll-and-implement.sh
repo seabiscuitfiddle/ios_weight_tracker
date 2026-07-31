@@ -57,6 +57,33 @@ DRY_RUN="${DRY_RUN:-0}"
 
 mkdir -p "$WORKROOT"
 
+# ---------------------------------------------------------------------------
+# Credentials.
+#
+# Tokens live in this file rather than in the crontab, so they stay out of the
+# repo, out of `crontab -l` output, and out of the process table. Create it as:
+#
+#   install -m 600 /dev/null ~/.claude-autopilot/env
+#   $EDITOR ~/.claude-autopilot/env
+#
+#     export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
+#     export GH_TOKEN=ghp_...              # optional; see notes at the bottom
+#
+# ---------------------------------------------------------------------------
+AUTOPILOT_ENV_FILE="${AUTOPILOT_ENV_FILE:-$HOME/.claude-autopilot/env}"
+if [ -f "$AUTOPILOT_ENV_FILE" ]; then
+  PERMS=$(stat -c '%a' "$AUTOPILOT_ENV_FILE")
+  case "$PERMS" in
+    *[1-7][1-7]|*[1-7]0|*0[1-7])
+      echo "Refusing to read $AUTOPILOT_ENV_FILE — mode $PERMS is readable by others." >&2
+      echo "Fix with: chmod 600 $AUTOPILOT_ENV_FILE" >&2
+      exit 1
+      ;;
+  esac
+  # shellcheck disable=SC1090
+  . "$AUTOPILOT_ENV_FILE"
+fi
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
 # ---------------------------------------------------------------------------
@@ -313,17 +340,15 @@ log "=== Poll end (processed $PROCESSED issue(s)) ==="
 #   crontab -e
 #   */5 * * * * /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
 #
-# cron runs with a minimal PATH and no desktop session, so set these at the top
-# of the crontab:
+# Tokens come from ~/.claude-autopilot/env (see "Credentials" above), so the
+# crontab only needs PATH — cron's default PATH is too small to find gh/claude:
 #
 #   PATH=/home/brianw/.local/bin:/usr/local/bin:/usr/bin:/bin
-#   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
-#   GH_TOKEN=ghp_...
 #
 # Verify that environment is sufficient before trusting the schedule:
 #
-#   env -i HOME="$HOME" PATH=... CLAUDE_CODE_OAUTH_TOKEN=... GH_TOKEN=... \
-#     DRY_RUN=1 /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
+#   env -i HOME="$HOME" PATH=/home/brianw/.local/bin:/usr/bin:/bin DRY_RUN=1 \
+#     /home/brianw/Dev/ios_weight_tracker/scripts/poll-and-implement.sh
 #
 # HOME must be passed through: cron provides it, env -i does not, and both gh
 # and claude look under it for config.
