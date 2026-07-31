@@ -158,6 +158,10 @@ public struct LLMNutritionParser: NutritionParser {
         let label = wire.label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty else { return nil }
 
+        // Blank is the documented answer for "no words behind this one", and it is also what a
+        // provider that ignored the field leaves behind. Both mean the same thing here.
+        let sourceText = wire.sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+
         // A day's eating tops out well below this; anything beyond is a decimal-point error,
         // and silently logging 40,000 calories would wreck the trend the goal engine reads.
         let calories = wire.calories
@@ -171,6 +175,7 @@ public struct LLMNutritionParser: NutritionParser {
         return ParsedItem(
             kind: kind,
             label: label,
+            sourceText: sourceText.isEmpty ? nil : sourceText,
             calories: calories,
             proteinGrams: kind == .food ? max(0, min(wire.proteinGrams, 1000)) : 0,
             fiberGrams: kind == .food ? max(0, min(wire.fiberGrams, 1000)) : 0,
@@ -193,6 +198,7 @@ public struct LLMNutritionParser: NutritionParser {
     struct WireItem: Decodable {
         var kind: String
         var label: String
+        var sourceText: String
         var calories: Int
         var proteinGrams: Double
         var fiberGrams: Double
@@ -204,6 +210,7 @@ public struct LLMNutritionParser: NutritionParser {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             kind = try container.decodeLenient(String.self, forKey: .kind) ?? ""
             label = try container.decodeLenient(String.self, forKey: .label) ?? ""
+            sourceText = try container.decodeLenient(String.self, forKey: .sourceText) ?? ""
             calories = try container.decodeLenient(Int.self, forKey: .calories) ?? 0
             proteinGrams = try container.decodeLenient(Double.self, forKey: .proteinGrams) ?? 0
             fiberGrams = try container.decodeLenient(Double.self, forKey: .fiberGrams) ?? 0
@@ -214,7 +221,7 @@ public struct LLMNutritionParser: NutritionParser {
         }
 
         enum CodingKeys: String, CodingKey {
-            case kind, label, calories, proteinGrams, fiberGrams
+            case kind, label, sourceText, calories, proteinGrams, fiberGrams
             case exerciseKind, durationMinutes, confidence
         }
     }
