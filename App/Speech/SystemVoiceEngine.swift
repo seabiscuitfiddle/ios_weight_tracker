@@ -9,6 +9,14 @@ import Speech
 /// that already has a tap, raises an Objective-C exception — which Swift cannot catch, so the
 /// process is simply killed. Voice input crashing rather than failing is what that looks like
 /// from the outside, and it is what the checks and the teardown below exist to prevent.
+///
+/// The other uncatchable failure here is concurrency's, and every closure in this file is
+/// written the way it is because of it: this type is `@MainActor`, so a closure written inside
+/// it is main-actor isolated unless it says otherwise, and Swift compiles an assert into an
+/// isolated closure that fires if it is ever called somewhere else. The speech, audio and TCC
+/// callbacks below are all called somewhere else — that is what they are for. Each one is
+/// therefore explicitly `@Sendable`, which is how a closure opts out of inheriting the
+/// isolation it is written in. See ``awaitingCallback``.
 @MainActor
 final class SystemVoiceEngine: NSObject, VoiceEngine {
     /// Both `nonisolated`, because they are written from the recogniser's delegate callback,
@@ -53,12 +61,13 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
     var isAvailable: Bool { recognizer?.isAvailable ?? false }
 
     func requestAuthorization() async throws {
-        let speechGranted = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
+        // Through ``awaitingCallback`` rather than a `withCheckedContinuation` written here, and
+        // that indirection is the entire point: the handler must not be main-actor isolated, and
+        // one written inline in this type silently would be.
+        let status: SFSpeechRecognizerAuthorizationStatus = await awaitingCallback { handler in
+            SFSpeechRecognizer.requestAuthorization(handler)
         }
-        guard speechGranted else { throw VoiceInputError.speechPermissionDenied }
+        guard status == .authorized else { throw VoiceInputError.speechPermissionDenied }
 
         guard await AVAudioApplication.requestRecordPermission() else {
             throw VoiceInputError.microphonePermissionDenied
@@ -100,8 +109,17 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
         request.requiresOnDeviceRecognition = true
         self.request = request
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
+        // `@Sendable`, because this one is called from the audio hardware's own realtime thread —
+        // the furthest thing there is from the main actor — and an isolated closure asserts.
+        //
+        // `nonisolated(unsafe)` is what lets a `@Sendable` closure capture the request at all: it
+        // is a main-actor value and the closure is not on the main actor. Appending buffers from
+        // the audio thread is what an `SFSpeechAudioBufferRecognitionRequest` is *for*, and the
+        // tap is removed in ``stop`` before the request is released, so the unsafety is the
+        // compiler's word for "the SDK guarantees this", not a race.
+        nonisolated(unsafe) let audioSink = request
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable (buffer, _) in
+            audioSink.append(buffer)
         }
 
         do {
@@ -120,8 +138,10 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
         updates = continuation
 
         // Captures the continuation and nothing else: this runs on the recogniser's own thread,
-        // and reaching back into `self` from there is what the stream exists to avoid.
-        task = recognizer.recognitionTask(with: request) { result, error in
+        // and reaching back into `self` from there is what the stream exists to avoid. `@Sendable`
+        // says so to the compiler as well — without it the closure inherits this type's actor and
+        // asserts on the recogniser's thread, which is every thread but the one it would accept.
+        task = recognizer.recognitionTask(with: request) { @Sendable (result, error) in
             if let result {
                 continuation.yield(.transcript(result.bestTranscription.formattedString))
             }
@@ -182,5 +202,33 @@ extension SystemVoiceEngine: SFSpeechRecognizerDelegate {
         _ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool
     ) {
         availabilityUpdates.yield(available)
+    }
+}
+
+/// Awaits a system API that answers by calling a handler back, on whatever thread it pleases.
+///
+/// Voice input crashed on launch a second time, and this is why. The shape is worth knowing
+/// because it is invisible at the call site and nothing warns about it.
+///
+/// A closure written inside an isolated type — `SystemVoiceEngine` is `@MainActor` — and handed to
+/// an SDK function whose handler is not declared `@Sendable` *inherits* that isolation. Swift then
+/// compiles a check into the front of the closure asserting that it really is running on the main
+/// actor. `SFSpeechRecognizer.requestAuthorization` answers from TCC's XPC reply queue, so the
+/// assert fails, and a failed isolation assert is not something anyone can catch: it is
+/// `dispatch_assert_queue` and a trap, and the process is gone. It cannot happen until someone is
+/// actually asked for the permission, which is why it survived every run where the permission had
+/// already been granted.
+///
+/// Declaring the handler `@Sendable` is what breaks the inheritance — a `@Sendable` closure is
+/// never actor-isolated, so no check is compiled in and the callback may arrive wherever it
+/// arrives. `ask` is `@Sendable` for exactly the same reason: as an ordinary closure it would
+/// inherit its caller's isolation and then be asserted when this function, which has none, calls
+/// it. And this lives at file scope rather than on the type because a member of a `@MainActor`
+/// type would be back where it started.
+func awaitingCallback<Value: Sendable>(
+    _ ask: @Sendable (@escaping @Sendable (Value) -> Void) -> Void
+) async -> Value {
+    await withCheckedContinuation { continuation in
+        ask { value in continuation.resume(returning: value) }
     }
 }
