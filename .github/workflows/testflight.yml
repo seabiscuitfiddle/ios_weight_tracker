@@ -49,7 +49,7 @@ jobs:
     if: github.repository == 'seabiscuitfiddle/ios_weight_tracker'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show toolchain
         # Same reasoning as ci.yml: no xcode-select. The runner's default Xcode is the supported one.
@@ -334,7 +334,7 @@ jobs:
         # Kept even on success: if App Store Connect rejects the build during processing, this
         # is the exact binary it rejected, and it can be inspected without rebuilding.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Tally-${{ github.run_number }}.ipa
           path: ${{ runner.temp }}/export/*.ipa
