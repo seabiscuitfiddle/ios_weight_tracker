@@ -114,9 +114,7 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
         request.requiresOnDeviceRecognition = true
         self.request = request
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
-        }
+        Self.installTap(on: inputNode, format: format, appendingTo: request)
 
         do {
             engine.prepare()
@@ -135,7 +133,12 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
 
         // Captures the continuation and nothing else: this runs on the recogniser's own thread,
         // and reaching back into `self` from there is what the stream exists to avoid.
-        task = recognizer.recognitionTask(with: request) { result, error in
+        //
+        // `@Sendable` for the same reason as the authorization handler above — without it this
+        // closure inherits the type's main-actor isolation, and the recogniser calling it from
+        // its own thread trips the isolation assertion rather than delivering a transcript. A
+        // continuation is safe to yield to from anywhere, so nothing else has to change.
+        task = recognizer.recognitionTask(with: request) { @Sendable result, error in
             if let result {
                 continuation.yield(.transcript(result.bestTranscription.formattedString))
             }
@@ -173,6 +176,34 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
             try? AVAudioSession.sharedInstance().setActive(
                 false, options: .notifyOthersOnDeactivation
             )
+        }
+    }
+
+    /// Installs the microphone tap from outside this type's isolation, which is the only reason
+    /// this is a separate function.
+    ///
+    /// A tap block written inline in ``start`` is a closure inside a `@MainActor` type, so it
+    /// inherits that isolation. `installTap` takes an Objective-C block annotated with no
+    /// isolation of its own, so the compiler cannot check the inheritance where the closure is
+    /// written and emits a runtime assertion at its first instruction instead. AVFoundation calls
+    /// a tap on its realtime audio thread — never the main one — so the assertion failed on the
+    /// first buffer after the microphone came up and trapped the process: `EXC_BREAKPOINT`, no
+    /// error, nothing logged. Exactly the failure the authorization handler above describes,
+    /// arriving a moment later in the same session.
+    ///
+    /// Written here, in a `nonisolated` context, the closure inherits nothing and no assertion is
+    /// emitted. Annotating it `@Sendable` in place would do the same, but a `@Sendable` closure
+    /// cannot capture the request — `SFSpeechAudioBufferRecognitionRequest` is not `Sendable`, and
+    /// under Swift 6 that capture is an error rather than the warning it would have been. Passing
+    /// the request as a parameter to a synchronous `nonisolated` function crosses no isolation
+    /// boundary, so nothing needs to be made `Sendable` or asserted about at run time.
+    private nonisolated static func installTap(
+        on inputNode: AVAudioInputNode,
+        format: AVAudioFormat,
+        appendingTo request: SFSpeechAudioBufferRecognitionRequest
+    ) {
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            request.append(buffer)
         }
     }
 
