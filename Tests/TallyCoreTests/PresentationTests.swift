@@ -388,6 +388,87 @@ struct DesignTokenTests {
     }
 }
 
+/// The diameters the home-screen widgets actually draw the ring at: 80pt fixed in the medium
+/// tile, and roughly 84–100pt in the 2×2 one, which takes whatever its footer leaves on the
+/// device it lands on. The ends are padded a little for the sizes Display Zoom can produce.
+private let drawnRingDiameters: [Double] = [72, 80, 88, 96, 104, 120]
+
+/// The widest value these widgets show is a four-digit calorie count with its group separator —
+/// "1,738". SF Pro's heavy digits run about 0.6em with a comma around 0.3em, so the string needs
+/// roughly 2.7 × its point size.
+private let widestValueEms = 2.7
+
+@Suite("Widget ring metrics")
+struct RingMetricsTests {
+    /// The assertion this suite exists for. A number wider than the hole in the ring draws
+    /// straight over the stroke, which is a rendering fault no simulator-free test could see —
+    /// but the arithmetic that decides it is right here, so this can.
+    @Test("keep the type inside the stroke, with air around it", arguments: drawnRingDiameters)
+    func typeFitsTheHole(_ diameter: Double) {
+        let metrics = RingMetrics(diameter: diameter)
+        let halfWidth = metrics.contentWidth / 2
+        let halfHeight = metrics.contentHeight / 2
+        // The corner of the text box is its furthest point from the centre, so it is the first
+        // thing to touch the stroke.
+        let corner = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
+
+        #expect(corner <= metrics.innerDiameter / 2)
+        // Merely not overlapping still reads as a mistake; the design wants visible air.
+        #expect(corner <= metrics.innerDiameter / 2 * 0.95)
+    }
+
+    @Test("leave room for the widest number they show", arguments: drawnRingDiameters)
+    func widestValueFits(_ diameter: Double) {
+        let metrics = RingMetrics(diameter: diameter)
+        #expect(metrics.contentWidth >= metrics.valueFontSize * widestValueEms)
+    }
+
+    @Test("keep the caption readable and secondary", arguments: drawnRingDiameters)
+    func captionStaysReadable(_ diameter: Double) {
+        let metrics = RingMetrics(diameter: diameter)
+        #expect(metrics.labelFontSize >= RingMetrics.minimumLabelSize)
+        #expect(metrics.labelFontSize < metrics.valueFontSize)
+    }
+
+    /// Nothing may be a fixed point size: the two widgets draw this ring at different diameters,
+    /// and the 2×2 one's diameter changes with the device and with Display Zoom.
+    @Test("scale every dimension with the diameter")
+    func everythingScales() throws {
+        let metrics = drawnRingDiameters.map(RingMetrics.init(diameter:))
+
+        #expect(metrics.map(\.lineWidth) == metrics.map(\.lineWidth).sorted())
+        #expect(metrics.map(\.valueFontSize) == metrics.map(\.valueFontSize).sorted())
+        #expect(metrics.map(\.contentWidth) == metrics.map(\.contentWidth).sorted())
+        #expect(metrics.map(\.contentHeight) == metrics.map(\.contentHeight).sorted())
+
+        let smallest = try #require(metrics.first)
+        let largest = try #require(metrics.last)
+        #expect(smallest.valueFontSize < largest.valueFontSize)
+    }
+
+    /// The design draws this ring as a 104pt box with an 11.2pt stroke. The widgets no longer
+    /// draw it that large — it did not fit — but the *proportion* is what the design specifies,
+    /// and holding it is what keeps the smaller ring looking like the drawing.
+    @Test("hold the design's stroke proportion")
+    func strokeMatchesTheDesign() {
+        #expect(abs(RingMetrics(diameter: 104).lineWidth - 11.2) < 0.3)
+    }
+
+    /// Diameters too small to write two lines into, plus the nonsense a layout can briefly hand
+    /// down during a transition. "No room" has to come out as zero rather than as the NaN a
+    /// negative square root would give, because a NaN in a frame is a blank widget.
+    @Test("survive a ring too small to write in", arguments: [-8.0, 0, 1, 12, 24])
+    func degenerateDiameters(_ diameter: Double) {
+        let metrics = RingMetrics(diameter: diameter)
+
+        #expect(metrics.contentWidth.isNaN == false)
+        #expect(metrics.contentWidth >= 0)
+        #expect(metrics.contentHeight >= 0)
+        #expect(metrics.lineWidth >= 0)
+        #expect(metrics.innerDiameter >= 0)
+    }
+}
+
 /// WCAG 2.1 contrast between a foreground token and an opaque background token.
 ///
 /// A translucent foreground is composited onto the background first, which is what the
