@@ -16,6 +16,10 @@ public struct DailyGoal: Hashable, Sendable {
         case manual
         /// Mifflin-St Jeor only — not enough history yet to check it against reality.
         case formula
+        /// Mifflin-St Jeor for the resting half, with the movement half measured by Apple
+        /// Health rather than guessed at from an activity level. Still unchecked against the
+        /// user's own results, but resting on one estimate instead of two.
+        case measuredActivity
         /// Entirely from observed energy balance; the formula wasn't available.
         case observed
         /// A mix, weighted by how much history supports the observed estimate.
@@ -28,6 +32,8 @@ public struct DailyGoal: Hashable, Sendable {
                 "Set by you"
             case .formula:
                 "Estimated from your height, age, and activity"
+            case .measuredActivity:
+                "Estimated from your height and age, with activity from Apple Health"
             case .observed:
                 "Measured from your logging and weight trend"
             case .blended(let weight):
@@ -123,6 +129,15 @@ public enum GoalCalculator {
         /// Net calories per day, for days that have at least one entry. Days absent from this
         /// dictionary are treated as unlogged, **not** as zero.
         public var dailyNetCalories: [Day: Int]
+        /// The earliest day whose net calories measure the same quantity as today's.
+        ///
+        /// Nil, the usual case, means the whole history is comparable. It is set when the user
+        /// switches on measured activity: from that day the day's movement is subtracted on the
+        /// net side and expenditure is BMR alone, where before it was folded into the activity
+        /// multiplier instead. Averaging across that boundary would inflate observed maintenance
+        /// for a month, so earlier days are excluded from the observed window entirely rather
+        /// than blended in.
+        public var netCaloriesValidFrom: Day?
         public var today: Day
         public var now: Date
         public var calendar: Calendar
@@ -132,6 +147,7 @@ public enum GoalCalculator {
             settings: GoalSettings,
             weightSamples: [WeightSample],
             dailyNetCalories: [Day: Int],
+            netCaloriesValidFrom: Day? = nil,
             today: Day = Day.today(),
             now: Date = Date(),
             calendar: Calendar = .current
@@ -140,6 +156,7 @@ public enum GoalCalculator {
             self.settings = settings
             self.weightSamples = weightSamples
             self.dailyNetCalories = dailyNetCalories
+            self.netCaloriesValidFrom = netCaloriesValidFrom
             self.today = today
             self.now = now
             self.calendar = calendar
@@ -164,10 +181,11 @@ public enum GoalCalculator {
             )
         }
         let observation = observedExpenditure(inputs, trend: trend)
+        let observedDays = comparableSpan(inputs, trend: trend)
         let maintenance = Expenditure.blendedEstimate(
             formula: formula,
             observed: observation?.estimate,
-            observedDays: trend.spannedDays(calendar: inputs.calendar)
+            observedDays: observedDays
         )
 
         // With no maintenance estimate, a manual goal is the only thing that can still produce
@@ -189,7 +207,8 @@ public enum GoalCalculator {
         let basis = self.basis(
             formula: formula,
             observed: observation?.estimate,
-            observedDays: trend.spannedDays(calendar: inputs.calendar)
+            observedDays: observedDays,
+            usesMeasuredActivity: inputs.profile.usesMeasuredActivity
         )
 
         let direction = self.direction(
@@ -282,7 +301,7 @@ public enum GoalCalculator {
         _ inputs: Inputs,
         trend: WeightTrend
     ) -> (estimate: Double, windowDays: Int, coverage: Double)? {
-        let span = trend.spannedDays(calendar: inputs.calendar)
+        let span = comparableSpan(inputs, trend: trend)
         guard span >= Expenditure.minimumObservedDays else { return nil }
 
         let windowDays = min(span, observedWindowDays)
@@ -315,9 +334,27 @@ public enum GoalCalculator {
         return (estimate, windowDays, coverage)
     }
 
-    static func basis(formula: Double?, observed: Double?, observedDays: Int) -> DailyGoal.Basis {
+    /// How much history can legitimately feed the observed estimate.
+    ///
+    /// The weight readings span one length; the days whose net calories mean the same thing as
+    /// today's span another. The shorter of the two governs, both for whether an observed
+    /// estimate is computed at all and for how far the trust ramp has climbed — a switch to
+    /// measured activity resets the second without touching the first.
+    static func comparableSpan(_ inputs: Inputs, trend: WeightTrend) -> Int {
+        let span = trend.spannedDays(calendar: inputs.calendar)
+        guard let validFrom = inputs.netCaloriesValidFrom, let lastDay = trend.lastDay
+        else { return span }
+        return min(span, max(0, validFrom.days(until: lastDay, calendar: inputs.calendar)))
+    }
+
+    static func basis(
+        formula: Double?,
+        observed: Double?,
+        observedDays: Int,
+        usesMeasuredActivity: Bool = false
+    ) -> DailyGoal.Basis {
         switch (formula, observed) {
-        case (_, nil): .formula
+        case (_, nil): usesMeasuredActivity ? .measuredActivity : .formula
         case (nil, _): .observed
         default: .blended(observedWeight: Expenditure.observedWeight(forDays: observedDays))
         }

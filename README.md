@@ -99,7 +99,7 @@ runs *on*, not what it is built *with*.
 | Correct typography | | Archivo font files — see [Fonts](#2-fonts) |
 | AI logging by text | On iOS 26+ with Apple Intelligence | Otherwise an API key for any supported provider, pasted into Settings |
 | Widgets showing data | | App Group registered for your team |
-| HealthKit import | | A real device (Health has no simulator data) |
+| HealthKit import and activity | | A real device (Health has no simulator data) |
 | Voice input | | A real device (no simulator microphone) |
 | Siri phrases | | A real device |
 
@@ -234,6 +234,15 @@ crash, not a degraded feature.
 
 Tally requests **read-only** Health access and never writes back, so
 `NSHealthUpdateUsageDescription` is not required.
+
+Health activity also needs the **HealthKit Background Delivery** capability, which is what lets
+the day's movement reach your target and your widgets without opening the app. It is a separate
+tick box on the App ID: enabling it in the portal is not enough on its own, because the
+provisioning profile embeds the capabilities as they stood when it was generated. If you added
+it to an existing App ID, **regenerate the app's provisioning profile** and update
+`IOS_PROVISION_PROFILE_BASE64` before the next TestFlight run — CI builds with signing off and
+will not catch a stale profile, so the failure lands at archive time. The widget's profile is
+unaffected.
 
 ### 4. URL scheme
 
@@ -494,7 +503,7 @@ every push: each upload consumes a build number and notifies your testers.
 
 | Kind | Identifier | Capabilities |
 |---|---|---|
-| App ID | `<id>` | App Groups, HealthKit |
+| App ID | `<id>` | App Groups, HealthKit (including **Background Delivery**) |
 | App ID | `<id>.widget` | App Groups |
 | App Group | `group.<id>` | — |
 
@@ -580,12 +589,28 @@ CI currently verifies, on every push:
 
 ### Health, voice, and Siri
 
-**Apple Health** import is read-only and user-triggered from Settings — Tally never writes to
-Health and never syncs. Three rules are worth knowing because they're deliberate: a weight you
-entered by hand is never overwritten; only one reading per day is taken, the earliest, since a
-late-evening reading followed by a morning one would manufacture a swing that never happened; and
-only a workout's **active** calories are counted, because total energy includes the basal calories
-already inside your expenditure estimate.
+**Apple Health** is off until you switch it on in Settings, and read-only for as long as it is on —
+Tally never writes to Health. Three import rules are worth knowing because they're deliberate: a
+weight you entered by hand is never overwritten; only one reading per day is taken, the earliest,
+since a late-evening reading followed by a morning one would manufacture a swing that never
+happened; and only a workout's **active** calories are counted, because total energy includes the
+basal calories already inside your expenditure estimate.
+
+A second switch, **Use activity for my target**, changes where expenditure comes from. Normally
+Tally estimates it as your BMR times an activity level you pick, and subtracts logged workouts
+from the day's net. With this on, the activity level is out of the picture: expenditure is your
+BMR alone — the same quantity Apple calls Resting Energy — and *everything* above it is
+subtracted on the net side, workouts as they finish plus one "Everyday activity" entry per day
+carrying the movement no workout accounts for. That entry is the day's active energy minus the
+workouts already in the log, rewritten in place as the day goes on, so the target tracks your
+Move ring without counting a run twice. Days are only written when the number actually changes.
+
+Two consequences to know about. Switching it on records the day, and the adaptive expenditure
+estimate ignores everything logged before it — days without an activity credit measure a
+different thing, and averaging across the boundary would inflate your maintenance figure for a
+month. Until two weeks of comparable days accumulate, the target is formula-only. Switching it
+off deletes the activity entries, because the activity multiplier comes back at the same moment
+and the two together would double-count. Imported weights and workouts are always kept.
 
 **Voice** transcribes on the device (`requiresOnDeviceRecognition`). Audio never leaves the phone —
 only the resulting text, and only if you send it. The transcript lands in the editable field first,

@@ -161,17 +161,9 @@ final class HistoryModel {
             // The goal shown is today's, which is an approximation for past days — the goal that
             // applied back then isn't stored. Better than showing nothing, and the net is the
             // number that actually matters on a historical day.
-            goal = try GoalCalculator.dailyGoal(GoalCalculator.Inputs(
-                profile: stores.settings.profile(),
-                settings: stores.settings.goalSettings(),
-                weightSamples: stores.weights.allSamples(),
-                dailyNetCalories: stores.entries
-                    .totals(from: today.adding(days: -365, calendar: calendar), through: today)
-                    .mapValues(\.netCalories),
-                today: today,
-                now: Date(),
-                calendar: calendar
-            ))?.calories
+            goal = GoalCalculator.dailyGoal(
+                try GoalCalculator.Inputs(stores: stores, today: today, calendar: calendar)
+            )?.calories
         } catch {
             entries = []
             totals = .empty

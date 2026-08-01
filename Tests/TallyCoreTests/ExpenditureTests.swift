@@ -140,6 +140,94 @@ struct FormulaEstimateTests {
         #expect(multipliers.first == 1.2)
         #expect(multipliers.last == 1.9)
     }
+
+    /// BMR is the same quantity Apple calls Resting Energy, so with Health measuring everything
+    /// above it there is nothing left for a multiplier to stand in for.
+    @Test("returns BMR alone under measured activity")
+    func measuredActivityDropsTheMultiplier() {
+        var profile = UserProfile(
+            birthDate: birthDate(forAge: 30),
+            heightCentimeters: 180,
+            biologicalSex: .male,
+            activityLevel: .moderate
+        )
+        profile.health = HealthPreferences(isEnabled: true, usesActivityForExpenditure: true)
+
+        let estimate = Expenditure.formulaEstimate(
+            profile: profile,
+            weightPounds: 80 * WeightSample.poundsPerKilogram,
+            asOf: referenceNow,
+            calendar: utc
+        )
+
+        #expect(abs((estimate ?? 0) - 1780) < 0.5)
+    }
+}
+
+@Suite("Health switches")
+struct HealthPreferenceTests {
+    @Test("a new profile leaves Health alone")
+    func defaultsToOff() {
+        #expect(UserProfile.default.health.isEnabled == false)
+        #expect(UserProfile.default.usesMeasuredActivity == false)
+        #expect(UserProfile.default.effectiveActivityMultiplier
+            == UserProfile.default.activityLevel.multiplier)
+    }
+
+    @Test("measured activity needs both switches")
+    func needsBothSwitches() {
+        var profile = UserProfile(activityLevel: .moderate)
+
+        profile.health = HealthPreferences(isEnabled: false, usesActivityForExpenditure: true)
+        #expect(profile.usesMeasuredActivity == false)
+        #expect(profile.effectiveActivityMultiplier == 1.55)
+
+        profile.health = HealthPreferences(isEnabled: true, usesActivityForExpenditure: false)
+        #expect(profile.usesMeasuredActivity == false)
+        #expect(profile.effectiveActivityMultiplier == 1.55)
+
+        profile.health = HealthPreferences(isEnabled: true, usesActivityForExpenditure: true)
+        #expect(profile.usesMeasuredActivity)
+        #expect(profile.effectiveActivityMultiplier == 1.0)
+    }
+
+    /// Switching Health off leaves the nested flag set. The modelled multiplier has to come
+    /// back at that moment, or the day would have no expenditure above resting at all.
+    @Test("restores the multiplier when Health is switched off")
+    func restoresMultiplierOnSwitchOff() {
+        var profile = UserProfile(activityLevel: .veryActive)
+        profile.health = HealthPreferences(isEnabled: true, usesActivityForExpenditure: true)
+        profile.health.isEnabled = false
+
+        #expect(profile.health.usesActivityForExpenditure)
+        #expect(profile.effectiveActivityMultiplier == 1.725)
+    }
+
+    /// Health was always reachable before these switches existed, so a stored profile that
+    /// predates them must not read as a user who turned it off.
+    @Test("a profile saved before the switches keeps Health available")
+    func legacyProfilesStayEnabled() throws {
+        let legacy = """
+            {"biologicalSex":"male","activityLevel":"light","massUnit":"pounds"}
+            """
+        let decoded = try JSONDecoder().decode(UserProfile.self, from: Data(legacy.utf8))
+
+        #expect(decoded.health.isEnabled)
+        #expect(decoded.usesMeasuredActivity == false)
+    }
+
+    @Test("survives a round trip")
+    func roundTrips() throws {
+        var profile = UserProfile(heightCentimeters: 178)
+        profile.health = HealthPreferences(
+            isEnabled: true,
+            usesActivityForExpenditure: true,
+            activityTrackingStartDay: Day(year: 2026, month: 8, day: 1)
+        )
+
+        let data = try JSONEncoder().encode(profile)
+        #expect(try JSONDecoder().decode(UserProfile.self, from: data) == profile)
+    }
 }
 
 @Suite("Observed expenditure estimate")

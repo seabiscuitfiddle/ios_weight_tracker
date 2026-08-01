@@ -32,16 +32,43 @@ final class HealthKitImporter {
     /// that would itself leak health information. So this cannot be checked, only attempted: a
     /// declined type simply returns no samples, which is indistinguishable from having none.
     /// That is why the UI reports "nothing new" rather than claiming success.
-    func requestAuthorization() async throws {
+    ///
+    /// Guarded on the master switch as well as on availability. The prompt this raises is the
+    /// most visible thing the integration does, and a user who hasn't switched Health on should
+    /// never see it.
+    func requestAuthorization(profile: UserProfile) async throws {
+        guard profile.health.isEnabled else { throw HealthImportError.switchedOff }
         guard Self.isAvailable else { throw HealthImportError.unavailable }
         try await store.requestAuthorization(toShare: [], read: readTypes)
     }
 
-    /// Imports the last `days` days and returns how many records were written.
+    /// How far back the Settings button reaches.
+    static let manualImportDays = 90
+
+    /// How far back an activity refresh reaches.
     ///
-    /// - Returns: the number of new records, which may legitimately be zero — either because
-    ///   there is nothing new or because the user declined access.
-    func importRecent(days: Int = 90, into stores: StoreBundle) async throws -> Int {
+    /// Today is the day that matters, but a watch that spent the evening off the wrist writes
+    /// yesterday's calories later, and a rewrite is cheap: one statistics query and, for days
+    /// whose figure hasn't moved, no write at all.
+    static let activityRefreshDays = 7
+
+    /// Brings Health and Tally into step over `days` of history, and returns how many records
+    /// changed.
+    ///
+    /// - Parameters:
+    ///   - days: how far back to look.
+    ///   - profile: read for the two Health switches. Nothing is queried while the master
+    ///     switch is off, and the day's activity is only reconciled while measured activity is
+    ///     on — see ``UserProfile/usesMeasuredActivity``.
+    /// - Returns: the number of records written or removed, which may legitimately be zero —
+    ///   either because there is nothing new or because the user declined access.
+    @discardableResult
+    func sync(
+        days: Int = HealthKitImporter.manualImportDays,
+        into stores: StoreBundle,
+        profile: UserProfile
+    ) async throws -> Int {
+        guard profile.health.isEnabled else { throw HealthImportError.switchedOff }
         guard Self.isAvailable else { throw HealthImportError.unavailable }
 
         let calendar = Calendar.current
@@ -52,23 +79,25 @@ final class HealthKitImporter {
 
         let weights = try await fetchWeights(since: startDate)
         let workouts = try await fetchWorkouts(since: startDate)
+        let activity = profile.usesMeasuredActivity
+            ? try await fetchDailyActiveEnergy(from: start, through: today, calendar: calendar)
+            : []
 
         // Everything Tally already knows, so the import is idempotent.
-        let existing = try stores.entries.externalIdentifiers(from: start, through: today)
-        let existingWeightIdentifiers = Set(
-            try stores.weights.samples(from: start, through: today).compactMap(\.externalIdentifier)
-        )
-        let manualDays = Set(
-            try stores.weights.samples(from: start, through: today)
-                .filter { $0.source != .healthKit }
-                .map(\.day)
-        )
+        let existingEntries = try stores.entries.entries(from: start, through: today)
+        let storedWeights = try stores.weights.samples(from: start, through: today)
+        let manualDays = Set(storedWeights.filter { $0.source != .healthKit }.map(\.day))
 
         let plan = HealthImport.plan(
             weights: weights,
             workouts: workouts,
-            existingExternalIdentifiers: existing.union(existingWeightIdentifiers),
+            activity: activity,
+            existingEntries: existingEntries,
+            existingWeightIdentifiers: Set(storedWeights.compactMap(\.externalIdentifier)),
             daysWithManualWeight: manualDays,
+            activityTrackingStartDay: profile.usesMeasuredActivity
+                ? profile.health.activityTrackingStartDay
+                : nil,
             calendar: calendar
         )
 
@@ -77,6 +106,9 @@ final class HealthKitImporter {
         }
         if !plan.entries.isEmpty {
             try stores.entries.save(plan.entries)
+        }
+        for id in plan.deletions {
+            try stores.entries.delete(id: id)
         }
 
         return plan.count
@@ -96,6 +128,44 @@ final class HealthKitImporter {
                 externalIdentifier: sample.uuid.uuidString,
                 date: sample.startDate,
                 pounds: sample.quantity.doubleValue(for: .pound())
+            )
+        }
+    }
+
+    /// Active energy totalled per day.
+    ///
+    /// A statistics collection rather than the raw samples: the Watch writes active energy in
+    /// short bursts, so a busy week is thousands of rows to fetch and add up by hand, and
+    /// HealthKit will do exactly that sum in the daily buckets the log is organised by anyway.
+    private func fetchDailyActiveEnergy(
+        from start: Day,
+        through end: Day,
+        calendar: Calendar
+    ) async throws -> [HealthActivityReading] {
+        guard let anchor = start.startOfDay(calendar: calendar),
+              let endDate = end.adding(days: 1, calendar: calendar).startOfDay(calendar: calendar)
+        else { return [] }
+
+        let descriptor = HKStatisticsCollectionQueryDescriptor(
+            predicate: .quantitySample(
+                type: activeEnergyType,
+                predicate: HKQuery.predicateForSamples(withStart: anchor, end: endDate)
+            ),
+            options: .cumulativeSum,
+            anchorDate: anchor,
+            intervalComponents: DateComponents(day: 1)
+        )
+
+        let collection = try await descriptor.result(for: store)
+        return collection.statistics().compactMap { statistics in
+            guard let sum = statistics.sumQuantity() else { return nil }
+            let calories = Int(sum.doubleValue(for: .kilocalorie()).rounded())
+            guard calories > 0 else { return nil }
+            // Bucketed by the interval's start, which is the local midnight the anchor fixed —
+            // the same day boundary every entry in the log already uses.
+            return HealthActivityReading(
+                day: Day(date: statistics.startDate, calendar: calendar),
+                activeCalories: calories
             )
         }
     }
@@ -197,14 +267,16 @@ final class HealthKitImporter {
 
 enum HealthImportError: Error, CustomStringConvertible {
     case unavailable
+    /// The user has Apple Health switched off in Settings. Reaching HealthKit anyway would be
+    /// ignoring the one promise the switch makes.
+    case switchedOff
 
-    var description: String {
-        "Apple Health isn't available on this device."
-    }
+    var description: String { userMessage }
 
     var userMessage: String {
         switch self {
         case .unavailable: "Apple Health isn't available on this device."
+        case .switchedOff: "Apple Health is switched off in Tally's settings."
         }
     }
 }

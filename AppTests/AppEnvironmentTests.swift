@@ -104,6 +104,135 @@ struct AppEnvironmentTests {
         #expect(environment.selectedTab == .log)
         #expect(environment.takePendingLogMode() == .text)
     }
+
+    // MARK: Health switches
+    //
+    // HealthKit itself is unreachable here — `isHealthDataAvailable()` is false on the simulator,
+    // so nothing below queries Health or could. What these cover is the part that is still true
+    // without a device: that the switches leave the stored profile in a state the goal engine
+    // can act on, and that switching off takes back what switching on wrote.
+
+    @Test("a fresh install has Health switched off")
+    func healthStartsOff() throws {
+        let environment = environment()
+        let profile = try environment.stores.settings.profile()
+
+        #expect(profile.health.isEnabled == false)
+        #expect(profile.usesMeasuredActivity == false)
+    }
+
+    /// Measured activity is not the user's to turn on until they've allowed Health at all.
+    @Test("measured activity refuses while Health is off")
+    func measuredActivityNeedsHealth() async throws {
+        let environment = environment()
+
+        let message = await environment.setMeasuredActivity(true)
+
+        #expect(message == HealthImportError.switchedOff.userMessage)
+        #expect(try environment.stores.settings.profile().usesMeasuredActivity == false)
+    }
+
+    /// The start day is what keeps the observed estimate from averaging across the switch — see
+    /// `GoalCalculator.Inputs.netCaloriesValidFrom`. Recording it is the whole job here.
+    @Test("switching measured activity on records the day it began")
+    func recordsTheTrackingStart() async throws {
+        let environment = environment()
+        var profile = try environment.stores.settings.profile()
+        profile.health.isEnabled = true
+        try environment.stores.settings.save(profile)
+
+        await environment.setMeasuredActivity(true)
+
+        let stored = try environment.stores.settings.profile()
+        #expect(stored.usesMeasuredActivity)
+        #expect(stored.health.activityTrackingStartDay == Day.today())
+        #expect(stored.effectiveActivityMultiplier == 1.0)
+    }
+
+    /// The activity entries cannot outlive the switch: the modelled multiplier comes back at the
+    /// same moment, and the two together would count the same movement twice.
+    @Test("switching measured activity off takes its entries back")
+    func removesActivityEntriesOnSwitchOff() async throws {
+        let environment = environment()
+        let today = Day.today()
+
+        var profile = try environment.stores.settings.profile()
+        profile.health = HealthPreferences(
+            isEnabled: true,
+            usesActivityForExpenditure: true,
+            activityTrackingStartDay: today
+        )
+        try environment.stores.settings.save(profile)
+
+        try environment.stores.entries.save([
+            Entry(
+                kind: .exercise, label: HealthImport.activityLabel, calories: 240,
+                exerciseKind: .other, day: today, source: .healthKit,
+                externalIdentifier: HealthImport.activityIdentifier(for: today)
+            ),
+            Entry(
+                kind: .exercise, label: "Run · 38 min", calories: 320,
+                exerciseKind: .cardio, day: today, source: .healthKit,
+                externalIdentifier: "hk-workout-1"
+            ),
+        ])
+
+        await environment.setMeasuredActivity(false)
+
+        let remaining = try environment.stores.entries.entries(on: today)
+        // The workout is a record of something that happened and stays; only what Tally
+        // synthesised goes.
+        #expect(remaining.map(\.externalIdentifier) == ["hk-workout-1"])
+
+        let stored = try environment.stores.settings.profile()
+        #expect(stored.usesMeasuredActivity == false)
+        #expect(stored.health.activityTrackingStartDay == nil)
+    }
+
+    /// Switching Health off has to withdraw measured activity too — but not the user's log.
+    @Test("switching Health off keeps what was imported")
+    func switchingHealthOffKeepsImports() async throws {
+        let environment = environment()
+        let today = Day.today()
+
+        var profile = try environment.stores.settings.profile()
+        profile.health = HealthPreferences(
+            isEnabled: true,
+            usesActivityForExpenditure: true,
+            activityTrackingStartDay: today
+        )
+        try environment.stores.settings.save(profile)
+
+        try environment.stores.weights.save(
+            WeightSample(day: today, pounds: 168.4, source: .healthKit, externalIdentifier: "hk-1")
+        )
+        try environment.stores.entries.save(
+            Entry(
+                kind: .exercise, label: HealthImport.activityLabel, calories: 240,
+                exerciseKind: .other, day: today, source: .healthKit,
+                externalIdentifier: HealthImport.activityIdentifier(for: today)
+            )
+        )
+
+        await environment.setHealthEnabled(false)
+
+        let stored = try environment.stores.settings.profile()
+        #expect(stored.health.isEnabled == false)
+        #expect(stored.usesMeasuredActivity == false)
+        #expect(try environment.stores.weights.sample(on: today)?.pounds == 168.4)
+        #expect(try environment.stores.entries.entries(on: today).isEmpty)
+    }
+
+    @Test("an import refuses while Health is switched off")
+    func importRefusesWhileOff() async {
+        let environment = environment()
+        let message = await environment.importFromHealth()
+
+        // On a simulator "unavailable" is the honest answer and comes first; on a device it is
+        // the switch. Either way the import does not run.
+        #expect(message == HealthImportError.switchedOff.userMessage
+            || message == HealthImportError.unavailable.userMessage)
+    }
 }
 
 /// The rule that matters here is the expiry: a dismissal is scoped to the build that was running

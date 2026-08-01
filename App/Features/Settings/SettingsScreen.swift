@@ -32,6 +32,7 @@ struct SettingsScreen: View {
     @State private var saveError: String?
     @State private var isImportingHealth = false
     @State private var healthImportMessage: String?
+    @State private var isUpdatingHealth = false
 
     var body: some View {
         NavigationStack {
@@ -218,20 +219,28 @@ struct SettingsScreen: View {
         // then failing.
         if HealthKitImporter.isAvailable {
             Section {
-                Button {
-                    Task {
-                        isImportingHealth = true
-                        healthImportMessage = await environment.importFromHealth()
-                        isImportingHealth = false
+                Toggle("Read from Health", isOn: healthEnabledBinding)
+                    .disabled(isUpdatingHealth)
+
+                if profile.health.isEnabled {
+                    Toggle("Use activity for my target", isOn: measuredActivityBinding)
+                        .disabled(isUpdatingHealth)
+
+                    Button {
+                        Task {
+                            isImportingHealth = true
+                            healthImportMessage = await environment.importFromHealth()
+                            isImportingHealth = false
+                        }
+                    } label: {
+                        HStack {
+                            Text("Import from Health")
+                            Spacer()
+                            if isImportingHealth { ProgressView() }
+                        }
                     }
-                } label: {
-                    HStack {
-                        Text("Import from Health")
-                        Spacer()
-                        if isImportingHealth { ProgressView() }
-                    }
+                    .disabled(isImportingHealth || isUpdatingHealth)
                 }
-                .disabled(isImportingHealth)
 
                 if let healthImportMessage {
                     Text(healthImportMessage)
@@ -241,14 +250,87 @@ struct SettingsScreen: View {
             } header: {
                 Text("Apple Health")
             } footer: {
-                Text("""
-                    Brings across your weight and workouts from the last 90 days. Tally reads \
-                    from Health and never writes to it, and a weight you entered by hand is \
-                    never replaced. Only the active calories of a workout are counted — total \
-                    would double-count energy already in your daily estimate.
-                    """)
+                healthFooter
             }
         }
+    }
+
+    @ViewBuilder private var healthFooter: some View {
+        if !profile.health.isEnabled {
+            // What the switch buys and what it costs, before it is touched — not after the
+            // permission sheet has already appeared.
+            Text("""
+                Off, Tally never reads from Health. On, it can bring across your weight and \
+                workouts, and count the movement your watch measures towards your daily target. \
+                Tally only ever reads; it never writes to Health.
+                """)
+        } else if profile.health.usesActivityForExpenditure {
+            Text("""
+                Your daily target is built from your resting rate, and everything you move is \
+                subtracted from what you eat — workouts as they finish, and the rest of the \
+                day's movement as it happens. You don't need to log workouts separately. \
+                Switching this off puts the activity level under You back in charge.
+                """)
+        } else {
+            Text("""
+                Import brings across your weight and workouts from the last \
+                \(HealthKitImporter.manualImportDays) days. A weight you entered by hand is \
+                never replaced, and only the active calories of a workout are counted — total \
+                would double-count energy already in your daily estimate. Switching Apple \
+                Health off keeps everything already imported.
+                """)
+        }
+    }
+
+    /// Both switches go through the environment rather than through `save()`.
+    ///
+    /// They aren't preferences that can wait for the screen to close: turning Health on raises
+    /// a permission prompt, turning activity on starts an observer and rewrites today, and
+    /// turning either off has entries to take away. The local copy is updated in step so the
+    /// eventual `save()` writes the same thing back rather than reverting it.
+    private var healthEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { profile.health.isEnabled },
+            set: { isOn in
+                profile.health.isEnabled = isOn
+                if !isOn {
+                    profile.health.usesActivityForExpenditure = false
+                    profile.health.activityTrackingStartDay = nil
+                }
+                Task { @MainActor in
+                    isUpdatingHealth = true
+                    healthImportMessage = await environment.setHealthEnabled(isOn)
+                    reloadHealthPreferences()
+                    isUpdatingHealth = false
+                }
+            }
+        )
+    }
+
+    private var measuredActivityBinding: Binding<Bool> {
+        Binding(
+            get: { profile.health.usesActivityForExpenditure },
+            set: { isOn in
+                profile.health.usesActivityForExpenditure = isOn
+                profile.health.activityTrackingStartDay = isOn ? Day.today() : nil
+                Task { @MainActor in
+                    isUpdatingHealth = true
+                    healthImportMessage = await environment.setMeasuredActivity(isOn)
+                    reloadHealthPreferences()
+                    isUpdatingHealth = false
+                }
+            }
+        )
+    }
+
+    /// Takes the switches back from storage once the environment has finished with them.
+    ///
+    /// The optimistic update above is what keeps the toggle from lurching under the user's
+    /// finger; this is what makes sure the screen ends up showing what was actually saved, if
+    /// authorization failed or a write didn't land.
+    private func reloadHealthPreferences() {
+        guard let stored = try? environment.stores.settings.profile() else { return }
+        profile.health = stored.health
     }
 
     @ViewBuilder private var profileSection: some View {
@@ -282,9 +364,15 @@ struct SettingsScreen: View {
                 }
             }
 
-            Picker("Daily activity", selection: $profile.activityLevel) {
-                ForEach(UserProfile.ActivityLevel.allCases, id: \.self) {
-                    Text($0.displayName).tag($0)
+            if profile.usesMeasuredActivity {
+                // Not merely disabled: a greyed-out picker still showing "Lightly active" would
+                // read as the setting in force. It isn't — Health is.
+                LabeledContent("Daily activity", value: "Measured by Health")
+            } else {
+                Picker("Daily activity", selection: $profile.activityLevel) {
+                    ForEach(UserProfile.ActivityLevel.allCases, id: \.self) {
+                        Text($0.displayName).tag($0)
+                    }
                 }
             }
         } header: {
@@ -292,11 +380,18 @@ struct SettingsScreen: View {
         } footer: {
             // The double-counting trap, explained where the choice is made rather than left
             // for the user to discover from a goal that seems too generous.
-            Text("""
-                \(profile.activityLevel.detail). Choose this for everyday movement only — \
-                workouts you log are subtracted from your daily net separately, so counting \
-                them here too would credit them twice.
-                """)
+            if profile.usesMeasuredActivity {
+                Text("""
+                    Your watch is measuring how much you move, so there is nothing to estimate \
+                    here. Turn off Apple Health activity to set it yourself again.
+                    """)
+            } else {
+                Text("""
+                    \(profile.activityLevel.detail). Choose this for everyday movement only — \
+                    workouts you log are subtracted from your daily net separately, so counting \
+                    them here too would credit them twice.
+                    """)
+            }
         }
     }
 

@@ -37,6 +37,10 @@ public enum Expenditure {
 
     /// Formula-based daily expenditure: BMR scaled by everyday activity.
     ///
+    /// The scale factor is ``UserProfile/effectiveActivityMultiplier``, which is 1.0 when Apple
+    /// Health is measuring the movement — the result is then BMR alone, and the movement
+    /// reaches the day through entries instead.
+    ///
     /// Returns nil when the profile lacks a height or birth date, which is a legitimate state —
     /// the caller then falls back to the observed estimate or to a manual goal rather than
     /// inventing body measurements.
@@ -57,7 +61,7 @@ public enum Expenditure {
             ageYears: age,
             biologicalSex: profile.biologicalSex
         )
-        return bmr * profile.activityLevel.multiplier
+        return bmr * profile.effectiveActivityMultiplier
     }
 
     // MARK: Observed estimate

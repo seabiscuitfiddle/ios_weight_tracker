@@ -55,13 +55,15 @@ private func inputs(
     profile: UserProfile = profile(),
     settings: GoalSettings = GoalSettings(),
     weights: [WeightSample] = [],
-    net: [Day: Int] = [:]
+    net: [Day: Int] = [:],
+    validFrom: Day? = nil
 ) -> GoalCalculator.Inputs {
     GoalCalculator.Inputs(
         profile: profile,
         settings: settings,
         weightSamples: weights,
         dailyNetCalories: net,
+        netCaloriesValidFrom: validFrom,
         today: today,
         now: now,
         calendar: utc
@@ -380,6 +382,108 @@ struct GoalCalculationTests {
         )))
 
         #expect(goal.basis == .formula)
+    }
+
+    /// Switching to measured activity changes what a day's net calories *mean*: movement now
+    /// comes off the net instead of being folded into the multiplier. Averaging across that
+    /// boundary would inflate maintenance for a month.
+    @Test("ignores net calories logged before they became comparable")
+    func excludesDaysBeforeTheBoundary() throws {
+        let weights = decliningWeights(from: 175, perDay: 1.0 / 7.0, count: 43)
+
+        let withoutBoundary = try #require(GoalCalculator.dailyGoal(inputs(
+            settings: GoalSettings(targetPounds: 155),
+            weights: weights,
+            net: netIntake(2000, days: 43)
+        )))
+        #expect(withoutBoundary.basis != .formula)
+
+        // Only three days of comparable history: not enough to observe anything.
+        let withBoundary = try #require(GoalCalculator.dailyGoal(inputs(
+            settings: GoalSettings(targetPounds: 155),
+            weights: weights,
+            net: netIntake(2000, days: 43),
+            validFrom: today.adding(days: -3, calendar: utc)
+        )))
+        #expect(withBoundary.basis == .formula)
+    }
+
+    @Test("observes again once two weeks of comparable days accumulate")
+    func observesAfterTheRamp() throws {
+        let goal = try #require(GoalCalculator.dailyGoal(inputs(
+            settings: GoalSettings(targetPounds: 155),
+            weights: decliningWeights(from: 175, perDay: 1.0 / 7.0, count: 43),
+            net: netIntake(2000, days: 43),
+            validFrom: today.adding(days: -Expenditure.minimumObservedDays, calendar: utc)
+        )))
+
+        #expect(goal.basis != .formula)
+    }
+
+    /// The trust ramp measures how much history supports the observed estimate. History that
+    /// measured a different quantity doesn't support it, however long the weight line is.
+    @Test("ramps trust from the boundary, not from the first weigh-in")
+    func rampsTrustFromTheBoundary() throws {
+        let weights = decliningWeights(from: 175, perDay: 1.0 / 7.0, count: 60)
+        let net = netIntake(2000, days: 60)
+
+        let fullHistory = try #require(GoalCalculator.dailyGoal(inputs(
+            settings: GoalSettings(targetPounds: 155), weights: weights, net: net
+        )))
+        let sinceBoundary = try #require(GoalCalculator.dailyGoal(inputs(
+            settings: GoalSettings(targetPounds: 155), weights: weights, net: net,
+            validFrom: today.adding(days: -20, calendar: utc)
+        )))
+
+        guard case .blended(let fullWeight) = fullHistory.basis,
+              case .blended(let boundedWeight) = sinceBoundary.basis
+        else {
+            Issue.record("expected both goals to be blended")
+            return
+        }
+
+        #expect(fullWeight == 1)
+        #expect(boundedWeight < fullWeight)
+    }
+
+    /// A goal built on Health's activity figure shouldn't claim to have estimated it.
+    @Test("says when activity was measured rather than estimated")
+    func explainsMeasuredActivity() throws {
+        var measured = profile()
+        measured.health = HealthPreferences(isEnabled: true, usesActivityForExpenditure: true)
+
+        let goal = try #require(GoalCalculator.dailyGoal(inputs(
+            profile: measured,
+            settings: GoalSettings(targetPounds: 155),
+            weights: [WeightSample(day: today, pounds: 168.4)]
+        )))
+
+        #expect(goal.basis == .measuredActivity)
+        #expect(goal.basis.explanation.contains("Apple Health"))
+    }
+
+    /// BMR alone, because everything above it now arrives as an entry. A goal that kept the
+    /// multiplier as well would credit the same movement twice.
+    @Test("drops the activity multiplier under measured activity")
+    func dropsTheMultiplier() throws {
+        let modelled = try #require(GoalCalculator.dailyGoal(inputs(
+            settings: GoalSettings(targetPounds: 155),
+            weights: [WeightSample(day: today, pounds: 168.4)]
+        )))
+
+        var measured = profile()
+        measured.health = HealthPreferences(isEnabled: true, usesActivityForExpenditure: true)
+        let health = try #require(GoalCalculator.dailyGoal(inputs(
+            profile: measured,
+            settings: GoalSettings(targetPounds: 155),
+            weights: [WeightSample(day: today, pounds: 168.4)]
+        )))
+
+        let bmr = Expenditure.basalMetabolicRate(
+            weightPounds: 168.4, heightCentimeters: 178, ageYears: 35, biologicalSex: .male
+        )
+        #expect(health.maintenanceCalories == Int(bmr.rounded()))
+        #expect(health.maintenanceCalories < modelled.maintenanceCalories)
     }
 
     @Test("carries the distance to target and a projected date")

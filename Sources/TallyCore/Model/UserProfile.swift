@@ -1,5 +1,47 @@
 import Foundation
 
+/// How much of Tally's Apple Health integration the user has switched on.
+///
+/// Two switches rather than one, because they answer different questions. ``isEnabled`` is
+/// consent: with it off, Tally never calls into HealthKit at all — no authorization request, no
+/// queries, no background delivery. ``usesActivityForExpenditure`` is a modelling choice made
+/// *within* that consent, and changes where the day's movement comes from.
+public struct HealthPreferences: Hashable, Sendable, Codable {
+    /// The master switch. Nothing in the app may touch HealthKit while this is false.
+    public var isEnabled: Bool
+
+    /// Take expenditure from measured activity instead of the activity-level multiplier.
+    ///
+    /// Meaningless on its own — a user who turns Health off entirely leaves this set, and the
+    /// modelled multiplier has to come back. Read ``UserProfile/usesMeasuredActivity`` rather
+    /// than this, so no call site can act on it while Health is off.
+    public var usesActivityForExpenditure: Bool
+
+    /// The day measured activity was switched on.
+    ///
+    /// Days before it were logged without any activity credit, so their net calories measure a
+    /// different quantity. The goal engine excludes them from the observed window rather than
+    /// averaging across the boundary — see ``GoalCalculator/Inputs/netCaloriesValidFrom``.
+    public var activityTrackingStartDay: Day?
+
+    public init(
+        isEnabled: Bool = false,
+        usesActivityForExpenditure: Bool = false,
+        activityTrackingStartDay: Day? = nil
+    ) {
+        self.isEnabled = isEnabled
+        self.usesActivityForExpenditure = usesActivityForExpenditure
+        self.activityTrackingStartDay = activityTrackingStartDay
+    }
+
+    /// What a profile saved before these switches existed means.
+    ///
+    /// Health was always reachable then — the Settings section was shown whenever the device
+    /// had HealthKit — so `isEnabled: true` is what that user already had. Defaulting them to
+    /// off instead would silently remove a feature they were using.
+    public static let legacyDefault = HealthPreferences(isEnabled: true)
+}
+
 /// The body facts the Mifflin-St Jeor estimate needs, plus display preferences.
 ///
 /// Every physical field is optional. A user who declines to enter their height and age still
@@ -73,6 +115,10 @@ public struct UserProfile: Hashable, Sendable, Codable {
     /// The same reasoning makes the observed estimate consistent — deriving expenditure from
     /// net intake yields a before-exercise number too, so the formula estimate and the observed
     /// one measure the same quantity and can legitimately be blended.
+    ///
+    /// Ignored entirely while ``usesMeasuredActivity`` is true: Apple Health then reports the
+    /// movement instead of this standing in for it. The value is kept rather than cleared, so
+    /// switching measured activity back off restores the level the user chose.
     public var activityLevel: ActivityLevel
 
     public var massUnit: MassUnit
@@ -80,13 +126,16 @@ public struct UserProfile: Hashable, Sendable, Codable {
     /// Display and entry only — ``heightCentimeters`` stays canonical either way.
     public var heightUnit: HeightUnit
 
+    public var health: HealthPreferences
+
     public init(
         birthDate: Date? = nil,
         heightCentimeters: Double? = nil,
         biologicalSex: BiologicalSex = .unspecified,
         activityLevel: ActivityLevel = .light,
         massUnit: MassUnit = .pounds,
-        heightUnit: HeightUnit = .feetInches
+        heightUnit: HeightUnit = .feetInches,
+        health: HealthPreferences = HealthPreferences()
     ) {
         self.birthDate = birthDate
         self.heightCentimeters = heightCentimeters
@@ -94,6 +143,30 @@ public struct UserProfile: Hashable, Sendable, Codable {
         self.activityLevel = activityLevel
         self.massUnit = massUnit
         self.heightUnit = heightUnit
+        self.health = health
+    }
+
+    /// True when the day's movement is measured by Apple Health rather than modelled.
+    ///
+    /// The only form of the question the rest of the app should ask. Collapsing both switches
+    /// into one property is what stops a call site acting on
+    /// ``HealthPreferences/usesActivityForExpenditure`` while Health itself is off.
+    public var usesMeasuredActivity: Bool {
+        health.isEnabled && health.usesActivityForExpenditure
+    }
+
+    /// What to multiply BMR by to reach expenditure before logged exercise.
+    ///
+    /// 1.0 under measured activity, and that is the whole point: Mifflin-St Jeor BMR is the
+    /// same quantity as Apple's Resting Energy, so everything above it — workouts and everyday
+    /// movement alike — arrives as entries on the net side instead. Applying an activity
+    /// multiplier as well would credit that movement twice.
+    ///
+    /// Neither path accounts for the thermic effect of food, roughly 10% of intake. A fudge
+    /// factor here would be inventing a number; the observed estimate measures the shortfall
+    /// from real data within a few weeks and the blend moves onto it.
+    public var effectiveActivityMultiplier: Double {
+        usesMeasuredActivity ? 1.0 : activityLevel.multiplier
     }
 
     /// Hand-written so that a profile saved before height units were selectable still decodes.
@@ -108,6 +181,10 @@ public struct UserProfile: Hashable, Sendable, Codable {
         massUnit = try container.decode(MassUnit.self, forKey: .massUnit)
         // Those profiles were entered in centimetres, which is what the field meant at the time.
         heightUnit = try container.decodeIfPresent(HeightUnit.self, forKey: .heightUnit) ?? .centimeters
+        // A missing block means Health predates the switches, when it was always available —
+        // see ``HealthPreferences/legacyDefault``.
+        health = try container.decodeIfPresent(HealthPreferences.self, forKey: .health)
+            ?? .legacyDefault
     }
 
     public static let `default` = UserProfile()

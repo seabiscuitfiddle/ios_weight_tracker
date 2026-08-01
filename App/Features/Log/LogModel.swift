@@ -126,17 +126,8 @@ final class LogModel {
     }
 
     private func currentGoal(day: Day) throws -> DailyGoal? {
-        let windowStart = day.adding(days: -365, calendar: calendar)
-        return GoalCalculator.dailyGoal(GoalCalculator.Inputs(
-            profile: try stores.settings.profile(),
-            settings: try stores.settings.goalSettings(),
-            weightSamples: try stores.weights.allSamples(),
-            dailyNetCalories: try stores.entries
-                .totals(from: windowStart, through: day)
-                .mapValues(\.netCalories),
-            today: day,
-            now: Date(),
-            calendar: calendar
-        ))
+        GoalCalculator.dailyGoal(
+            try GoalCalculator.Inputs(stores: stores, today: day, calendar: calendar)
+        )
     }
 }
