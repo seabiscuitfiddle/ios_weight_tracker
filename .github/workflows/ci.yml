@@ -26,7 +26,7 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Cheap and first: a leaked Team ID or API key should fail in seconds, not after a
       # simulator boot. This is the same script the pre-commit hook runs, so what passes
       # locally passes here.
@@ -46,7 +46,7 @@ jobs:
     # snapshot guard, which then fails to link. See Package.swift.
     container: swift:6.3.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install SQLite headers
         # GRDB compiles against <sqlite3.h>, which Debian/Ubuntu ship separately. Apple platforms
@@ -70,7 +70,7 @@ jobs:
           fi
 
       - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .build
           key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
@@ -90,7 +90,7 @@ jobs:
     # would first appear during a TestFlight upload instead of here.
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Deliberately no `xcode-select`. Pinning a specific Xcode.app is what broke this before:
       # several are installed on the runner and not all of them have an iOS simulator runtime
@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xcodebuild-logs
           path: ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
