@@ -54,7 +54,21 @@ final class SystemVoiceEngine: NSObject, VoiceEngine {
 
     func requestAuthorization() async throws {
         let speechGranted = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
+            // `@Sendable` is load-bearing, and its absence is not a warning.
+            //
+            // A plain closure written inside a `@MainActor` type inherits that isolation. This
+            // one is handed to an Objective-C API whose handler is annotated with no isolation of
+            // its own, so the compiler cannot check that inheritance where it is written and
+            // emits a runtime assertion at the closure's first instruction instead. TCC answers
+            // on its own XPC reply queue — never the main one — so the assertion failed on the
+            // first tap of the Voice button and trapped the process: `EXC_BREAKPOINT`, no error,
+            // nothing logged, indistinguishable from the audio crashes this file already guards
+            // against.
+            //
+            // Marked `@Sendable`, the closure inherits nothing and no assertion is emitted.
+            // Resuming a continuation is safe from any thread, and the hop back to the main actor
+            // happens where it belongs — at the `await` below.
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 continuation.resume(returning: status == .authorized)
             }
         }
