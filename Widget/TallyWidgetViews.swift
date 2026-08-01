@@ -78,6 +78,13 @@ struct TallySummaryWidget: Widget {
 struct TallySummaryView: View {
     let entry: TallySnapshot
 
+    /// Fixed, unlike the 2×2 widget's ring, because here the ring shares its row with the bars —
+    /// a ring that sized itself to the row would have to be measured before the bars could be
+    /// laid out beside it. 80pt is what the shortest medium widget can spare once the footer and
+    /// the system's content margins have taken theirs, and it lands within a point or two of the
+    /// bars' own height, which is what makes the two halves of the row read as one block.
+    private let ringDiameter: Double = 80
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
@@ -86,7 +93,7 @@ struct TallySummaryView: View {
             }
             .padding(.horizontal, 4)
 
-            Spacer(minLength: 10)
+            Spacer(minLength: 6)
 
             quickLogStrip
         }
@@ -100,32 +107,17 @@ struct TallySummaryView: View {
     }
 
     @ViewBuilder private var ring: some View {
-        ZStack {
-            Circle()
-                .stroke(Color(token: Palette.text, opacity: Palette.dividerOpacity), lineWidth: 13)
-            Circle()
-                .trim(from: 0, to: entry.progress)
-                .stroke(
-                    Color(token: Palette.accent),
-                    style: StrokeStyle(lineWidth: 13, lineCap: .butt)
-                )
-                .rotationEffect(.degrees(-90))
-
-            VStack(spacing: 0) {
-                Text(TallyFormat.calories(entry.remaining ?? entry.totals.netCalories))
-                    .font(.system(size: 26, weight: .black))
-                Text(entry.remaining == nil ? "NET" : "CAL LEFT")
-                    .font(.system(size: 9, weight: .semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(Color(token: Palette.text, opacity: Palette.secondaryTextOpacity))
-            }
-        }
-        .frame(width: 104, height: 104)
+        NetCalorieRing(
+            value: TallyFormat.calories(entry.remaining ?? entry.totals.netCalories),
+            label: entry.remaining == nil ? "NET" : "CAL LEFT",
+            progress: entry.progress
+        )
+        .frame(width: ringDiameter, height: ringDiameter)
         .accessibilityHidden(true)
     }
 
     @ViewBuilder private var bars: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             if let goal = entry.goalCalories {
                 bar("NET", value: Double(entry.totals.netCalories), target: Double(goal),
                     text: TallyFormat.progressPair(entry.totals.netCalories, of: goal),
@@ -144,7 +136,7 @@ struct TallySummaryView: View {
     private func bar(
         _ label: String, value: Double, target: Double, text: String, fill: Color
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(label)
                     .font(.system(size: 9, weight: .semibold))
@@ -164,7 +156,7 @@ struct TallySummaryView: View {
                         .frame(width: geometry.size.width * min(1, max(0, target > 0 ? value / target : 0)))
                 }
             }
-            .frame(height: 7)
+            .frame(height: 6)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
@@ -173,7 +165,7 @@ struct TallySummaryView: View {
 
     /// Text · Photo · Voice, each a deep link into the matching compose mode.
     @ViewBuilder private var quickLogStrip: some View {
-        QuickLogStrip(height: 38) {
+        QuickLogStrip(height: 34) {
             QuickLogButton(title: "Text", systemImage: "text.alignleft", mode: .text)
             WidgetDivider()
             QuickLogButton(title: "Photo", systemImage: "camera", mode: .photo)
@@ -208,7 +200,8 @@ struct NetRingView: View {
             // The ring takes whatever the footer leaves rather than a fixed size. A 2×2 tile is
             // the tightest slot in the system and its content area differs across devices and
             // Display Zoom, so a hardcoded diameter is the one thing here that can overflow.
-            // `Circle` inscribes itself in the frame, so this stays circular at any size.
+            // ``NetCalorieRing`` inscribes itself in whatever it is given — and scales its type
+            // to match — so this stays circular, and legible, at any size.
             ring
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, 8)
@@ -225,34 +218,11 @@ struct NetRingView: View {
     }
 
     @ViewBuilder private var ring: some View {
-        ZStack {
-            Circle()
-                .stroke(Color(token: Palette.text, opacity: Palette.dividerOpacity), lineWidth: 12)
-            Circle()
-                .trim(from: 0, to: entry.progress)
-                .stroke(
-                    Color(token: Palette.accent),
-                    style: StrokeStyle(lineWidth: 12, lineCap: .butt)
-                )
-                .rotationEffect(.degrees(-90))
-
-            VStack(spacing: 0) {
-                Text(TallyFormat.calories(entry.remaining ?? entry.totals.netCalories))
-                    .font(.system(size: 28, weight: .black))
-                    // A four-digit goal at 28pt is wider than the ring's inner diameter. The
-                    // summary widget gets away without this because its ring is larger; here the
-                    // number has to give rather than the ring.
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                Text(subLabel)
-                    .font(.system(size: 9, weight: .semibold))
-                    .tracking(0.8)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .foregroundStyle(Color(token: Palette.text, opacity: Palette.secondaryTextOpacity))
-            }
-            .padding(.horizontal, 14)
-        }
+        NetCalorieRing(
+            value: TallyFormat.calories(entry.remaining ?? entry.totals.netCalories),
+            label: subLabel,
+            progress: entry.progress
+        )
         // Unlike the summary widget, the ring is not decorative here — there are no bars behind
         // it carrying the same numbers, so it has to be the accessible element.
         .accessibilityElement(children: .ignore)
@@ -268,6 +238,69 @@ struct NetRingView: View {
     /// toward, matching the summary widget's fallback.
     private var subLabel: String {
         entry.goalCalories.map { "OF \(TallyFormat.calories($0))" } ?? "NET"
+    }
+}
+
+/// The ring both home-screen widgets lead with: a track, the progress arc, and the number that
+/// sits inside them.
+///
+/// Nothing here is a point size. The view measures the box it was given, takes the largest circle
+/// that fits, and asks ``RingMetrics`` what belongs at that diameter — so the same ring is correct
+/// in the 2×2 tile, in the medium tile, and at whatever size Display Zoom leaves behind.
+///
+/// The type is confined to ``RingMetrics/contentWidth``, which is the reason the digits stay off
+/// the stroke. Sizing it against the whole frame instead is what let them collide: the frame is
+/// wider than the hole in the ring, and `minimumScaleFactor` shrinks text against the width it is
+/// handed, so it saw no reason to shrink anything. `strokeBorder` rather than `stroke` for a
+/// related reason: a plain stroke straddles the circle's edge and spills half its width outside
+/// the frame, over whatever the layout put next to it.
+struct NetCalorieRing: View {
+    let value: String
+    let label: String
+    /// 0...1. `TallySnapshot.progress` is already clamped.
+    let progress: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            let metrics = RingMetrics(diameter: min(geometry.size.width, geometry.size.height))
+
+            ZStack {
+                Circle()
+                    .strokeBorder(
+                        Color(token: Palette.text, opacity: Palette.dividerOpacity),
+                        lineWidth: metrics.lineWidth
+                    )
+                Circle()
+                    .inset(by: metrics.lineWidth / 2)
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        Color(token: Palette.accent),
+                        style: StrokeStyle(lineWidth: metrics.lineWidth, lineCap: .butt)
+                    )
+                    // Trim starts at 3 o'clock; the design starts the arc at the top.
+                    .rotationEffect(.degrees(-90))
+
+                VStack(spacing: 0) {
+                    Text(value)
+                        .font(.system(size: metrics.valueFontSize, weight: .black))
+                        // The backstop for a number wider than its slot — a five-digit total, or
+                        // a locale whose group separator is wider than a comma.
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Text(label)
+                        .font(.system(size: metrics.labelFontSize, weight: .semibold))
+                        .tracking(0.8)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .foregroundStyle(Color(token: Palette.text, opacity: Palette.secondaryTextOpacity))
+                }
+                .frame(width: metrics.contentWidth, height: metrics.contentHeight)
+            }
+            .frame(width: metrics.diameter, height: metrics.diameter)
+            // A `GeometryReader` pins its content to the top leading corner; this centres the
+            // circle in the — usually wider than tall — box the layout gave it.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
