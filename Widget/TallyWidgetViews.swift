@@ -172,36 +172,141 @@ struct TallySummaryView: View {
     }
 
     /// Text · Photo · Voice, each a deep link into the matching compose mode.
-    ///
-    /// `Link` rather than an interactive `Button`: all three need the app in the foreground —
-    /// for a keyboard, a camera, or a microphone — so running an intent in the widget process
-    /// would just have to launch the app anyway.
     @ViewBuilder private var quickLogStrip: some View {
-        HStack(spacing: 0) {
-            quickLogButton("Text", systemImage: "text.alignleft", mode: .text, accented: false)
-            divider
-            quickLogButton("Photo", systemImage: "camera", mode: .photo, accented: false)
-            divider
-            quickLogButton("Voice", systemImage: "mic", mode: .voice, accented: true)
-        }
-        .frame(height: 38)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color(token: Palette.text, opacity: Palette.dividerOpacity))
-                .frame(height: 1.5)
+        QuickLogStrip(height: 38) {
+            QuickLogButton(title: "Text", systemImage: "text.alignleft", mode: .text)
+            WidgetDivider()
+            QuickLogButton(title: "Photo", systemImage: "camera", mode: .photo)
+            WidgetDivider()
+            QuickLogButton(title: "Voice", systemImage: "mic", mode: .voice, accented: true)
         }
     }
+}
 
-    @ViewBuilder private var divider: some View {
+/// Home-screen widget: the ring alone, plus a two-target quick-log footer. Design screen 2a/2b.
+///
+/// The same data and the same provider as ``TallySummaryWidget`` — this is the compact slot, so
+/// the macro bars drop away and only the net ring survives. Photo goes too: at 2×2 there is room
+/// for two footer targets, and the design keeps the two that are fastest to start from cold.
+struct NetRingWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "TallyNetRing", provider: TallyTimelineProvider()) { entry in
+            NetRingView(entry: entry)
+                .containerBackground(Color(token: Palette.background), for: .widget)
+        }
+        .configurationDisplayName("Net calories ring")
+        .description("Today's net calories against your goal, with quick logging.")
+        .supportedFamilies([.systemSmall])
+    }
+}
+
+struct NetRingView: View {
+    let entry: TallySnapshot
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // The ring takes whatever the footer leaves rather than a fixed size. A 2×2 tile is
+            // the tightest slot in the system and its content area differs across devices and
+            // Display Zoom, so a hardcoded diameter is the one thing here that can overflow.
+            // `Circle` inscribes itself in the frame, so this stays circular at any size.
+            ring
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 8)
+
+            QuickLogStrip(height: 34) {
+                QuickLogButton(title: "Text", systemImage: "text.alignleft", mode: .text)
+                WidgetDivider()
+                QuickLogButton(title: "Voice", systemImage: "mic", mode: .voice, accented: true)
+            }
+        }
+        // Pinned for the same reason as the summary widget: the container background is a fixed
+        // light surface, so an unstated foreground would invert to near-white in dark mode.
+        .foregroundStyle(Color(token: Palette.text))
+    }
+
+    @ViewBuilder private var ring: some View {
+        ZStack {
+            Circle()
+                .stroke(Color(token: Palette.text, opacity: Palette.dividerOpacity), lineWidth: 12)
+            Circle()
+                .trim(from: 0, to: entry.progress)
+                .stroke(
+                    Color(token: Palette.accent),
+                    style: StrokeStyle(lineWidth: 12, lineCap: .butt)
+                )
+                .rotationEffect(.degrees(-90))
+
+            VStack(spacing: 0) {
+                Text(TallyFormat.calories(entry.remaining ?? entry.totals.netCalories))
+                    .font(.system(size: 28, weight: .black))
+                    // A four-digit goal at 28pt is wider than the ring's inner diameter. The
+                    // summary widget gets away without this because its ring is larger; here the
+                    // number has to give rather than the ring.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(subLabel)
+                    .font(.system(size: 9, weight: .semibold))
+                    .tracking(0.8)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .foregroundStyle(Color(token: Palette.text, opacity: Palette.secondaryTextOpacity))
+            }
+            .padding(.horizontal, 14)
+        }
+        // Unlike the summary widget, the ring is not decorative here — there are no bars behind
+        // it carrying the same numbers, so it has to be the accessible element.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Net calories")
+        .accessibilityValue(
+            entry.goalCalories.map {
+                TallyFormat.progressPair(entry.totals.netCalories, of: $0)
+            } ?? TallyFormat.calories(entry.totals.netCalories)
+        )
+    }
+
+    /// "OF 2,100" against a goal, matching the design; "NET" when there is no goal to count
+    /// toward, matching the summary widget's fallback.
+    private var subLabel: String {
+        entry.goalCalories.map { "OF \(TallyFormat.calories($0))" } ?? "NET"
+    }
+}
+
+/// The quick-log footer: a flush row of targets under a hairline rule.
+///
+/// `Link` rather than an interactive `Button` throughout: every mode needs the app in the
+/// foreground — for a keyboard, a camera, or a microphone — so running an intent in the widget
+/// process would just have to launch the app anyway. The design calls these iOS 17 interactive
+/// widget buttons; the interaction is the same, but the work cannot happen in-process.
+struct QuickLogStrip<Content: View>: View {
+    let height: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 0) { content }
+            .frame(height: height)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color(token: Palette.text, opacity: Palette.dividerOpacity))
+                    .frame(height: 1.5)
+            }
+    }
+}
+
+struct WidgetDivider: View {
+    var body: some View {
         Rectangle()
             .fill(Color(token: Palette.text, opacity: Palette.dividerOpacity))
             .frame(width: 1.5)
     }
+}
 
-    @ViewBuilder
-    private func quickLogButton(
-        _ title: String, systemImage: String, mode: DeepLink.LogMode, accented: Bool
-    ) -> some View {
+struct QuickLogButton: View {
+    let title: String
+    let systemImage: String
+    let mode: DeepLink.LogMode
+    var accented: Bool = false
+
+    var body: some View {
         Link(destination: DeepLink.log(mode: mode).url) {
             HStack(spacing: 6) {
                 Image(systemName: systemImage)
@@ -209,6 +314,8 @@ struct TallySummaryView: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
                     .textCase(.uppercase)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .foregroundStyle(accented ? Color(token: Palette.background) : Color(token: Palette.text))
             .frame(maxWidth: .infinity, maxHeight: .infinity)

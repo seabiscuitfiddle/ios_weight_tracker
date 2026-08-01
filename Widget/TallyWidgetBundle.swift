@@ -8,6 +8,7 @@ struct TallyWidgetBundle: WidgetBundle {
     var body: some Widget {
         NetCaloriesWidget()
         TallySummaryWidget()
+        NetRingWidget()
     }
 }
 
