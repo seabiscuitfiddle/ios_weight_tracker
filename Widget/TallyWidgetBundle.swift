@@ -79,18 +79,11 @@ struct TallyTimelineProvider: TimelineProvider {
 
         let totals = (try? stores.entries.totals(on: today)) ?? .empty
         let settings = (try? stores.settings.goalSettings()) ?? .default
-        let samples = (try? stores.weights.allSamples()) ?? []
-        let profile = (try? stores.settings.profile()) ?? .default
 
-        let goal = GoalCalculator.dailyGoal(GoalCalculator.Inputs(
-            profile: profile,
-            settings: settings,
-            weightSamples: samples,
-            dailyNetCalories: (try? stores.entries.totals(
-                from: today.adding(days: -365), through: today
-            ).mapValues(\.netCalories)) ?? [:],
-            today: today
-        ))
+        // The same inputs the app builds, so the widget's number cannot drift from the one on
+        // the Today screen. A failed read leaves the goal nil, which the views render as a dash.
+        let goal = (try? GoalCalculator.Inputs(stores: stores, today: today))
+            .flatMap(GoalCalculator.dailyGoal)
 
         return TallySnapshot(
             date: Date(),

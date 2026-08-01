@@ -72,24 +72,8 @@ final class TodayModel {
     }
 
     private func computeGoal() throws -> DailyGoal? {
-        let profile = try stores.settings.profile()
-        let settings = try stores.settings.goalSettings()
-        let samples = try stores.weights.allSamples()
-
-        // The observed-expenditure estimate needs per-day net intake across the window it
-        // measures. Bounded to a year so this stays a fixed-size read however long the user has
-        // been logging.
-        let windowStart = day.adding(days: -365, calendar: calendar)
-        let dailyTotals = try stores.entries.totals(from: windowStart, through: day)
-
-        return GoalCalculator.dailyGoal(GoalCalculator.Inputs(
-            profile: profile,
-            settings: settings,
-            weightSamples: samples,
-            dailyNetCalories: dailyTotals.mapValues(\.netCalories),
-            today: day,
-            now: Date(),
-            calendar: calendar
-        ))
+        GoalCalculator.dailyGoal(
+            try GoalCalculator.Inputs(stores: stores, today: day, calendar: calendar)
+        )
     }
 }

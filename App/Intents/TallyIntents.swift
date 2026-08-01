@@ -30,16 +30,9 @@ enum TallyServices {
 
     /// Today's goal, or nil when there isn't enough set up to compute one.
     static func todaysGoal(_ stores: StoreBundle, calendar: Calendar = .current) throws -> DailyGoal? {
-        let today = Day.today(calendar: calendar)
-        return GoalCalculator.dailyGoal(GoalCalculator.Inputs(
-            profile: try stores.settings.profile(),
-            settings: try stores.settings.goalSettings(),
-            weightSamples: try stores.weights.allSamples(),
-            dailyNetCalories: try stores.entries
-                .totals(from: today.adding(days: -365, calendar: calendar), through: today)
-                .mapValues(\.netCalories),
-            today: today,
-            now: Date(),
+        GoalCalculator.dailyGoal(try GoalCalculator.Inputs(
+            stores: stores,
+            today: Day.today(calendar: calendar),
             calendar: calendar
         ))
     }

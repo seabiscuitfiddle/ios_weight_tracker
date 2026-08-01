@@ -346,7 +346,12 @@ struct SettingsStoreTests {
             heightCentimeters: 178,
             biologicalSex: .female,
             activityLevel: .moderate,
-            massUnit: .kilograms
+            massUnit: .kilograms,
+            health: HealthPreferences(
+                isEnabled: true,
+                usesActivityForExpenditure: true,
+                activityTrackingStartDay: Day(year: 2026, month: 8, day: 1)
+            )
         )
 
         try store.save(profile)

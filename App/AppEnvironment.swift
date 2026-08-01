@@ -31,6 +31,10 @@ final class AppEnvironment {
     /// Rebuilt whenever settings change, because the model and key can both be edited.
     private(set) var parser: any NutritionParser
 
+    /// Held for as long as measured activity is switched on. Nil is the honest signal that
+    /// nothing is observing Health — see ``startActivityMonitor()``.
+    private var activityMonitor: HealthActivityMonitor?
+
     /// Banners the user has closed under this build. Mirrored in memory as well as on disk
     /// because `@Observable` can't see a write to `UserDefaults`, and the banner has to go the
     /// moment it's tapped.
@@ -140,7 +144,7 @@ final class AppEnvironment {
         KeychainAPIKeyStore.forCurrentBundle(providerID: providerID)
     }
 
-    // MARK: Health import
+    // MARK: Health
 
     /// Imports weight and workouts from Apple Health.
     ///
@@ -153,10 +157,15 @@ final class AppEnvironment {
             return HealthImportError.unavailable.userMessage
         }
 
-        let importer = HealthKitImporter()
         do {
-            try await importer.requestAuthorization()
-            let count = try await importer.importRecent(into: stores)
+            let profile = try stores.settings.profile()
+            guard profile.health.isEnabled else {
+                return HealthImportError.switchedOff.userMessage
+            }
+
+            let importer = HealthKitImporter()
+            try await importer.requestAuthorization(profile: profile)
+            let count = try await importer.sync(into: stores, profile: profile)
             guard count > 0 else {
                 return "Nothing new to import. If you haven't granted access, check Settings › Health."
             }
@@ -166,6 +175,173 @@ final class AppEnvironment {
         } catch {
             return "Couldn't read from Health: \(error.localizedDescription)"
         }
+    }
+
+    /// Brings today's activity up to date.
+    ///
+    /// Called on every foreground and from the background observer, so it has to be cheap and
+    /// silent: it reads a week of daily totals, writes only the days whose figure actually
+    /// moved, and says nothing when there is nothing to say. Failures are swallowed on purpose —
+    /// there is no user standing in front of this, and an alert about a Health read that didn't
+    /// come back would arrive with no question the user could answer.
+    func refreshHealthActivity() async {
+        guard HealthKitImporter.isAvailable,
+              let profile = try? stores.settings.profile(),
+              profile.usesMeasuredActivity
+        else { return }
+
+        let count = try? await HealthKitImporter().sync(
+            days: HealthKitImporter.activityRefreshDays,
+            into: stores,
+            profile: profile
+        )
+
+        // A background wake has no scene behind it, so the widget subscription set up at the
+        // scene root may never have been started. Reloading here is what makes the ring on the
+        // Home Screen the thing that actually moves. `WidgetRefresher` sends the reload; going
+        // through it rather than `WidgetCenter` keeps the one seam the app's tests can observe.
+        if let count, count > 0 { WidgetRefresher().reload() }
+    }
+
+    /// Turns the whole Health integration on or off.
+    ///
+    /// Switching on asks for authorization straight away: the prompt belongs to the moment the
+    /// user asked for Health, not to some later import they may not connect with it.
+    ///
+    /// Switching off withdraws everything Tally is doing — the observer, background delivery,
+    /// and the activity entries it synthesised — but **keeps the weights and workouts already
+    /// imported**. Those are records of things that happened, and deleting a month of the user's
+    /// log because a switch moved would be taking their data away from them.
+    ///
+    /// - Returns: a sentence to show the user, or nil when there is nothing worth saying.
+    @discardableResult
+    func setHealthEnabled(_ isEnabled: Bool) async -> String? {
+        do {
+            var profile = try stores.settings.profile()
+            profile.health.isEnabled = isEnabled
+
+            if isEnabled {
+                try saveProfile(profile)
+                try await HealthKitImporter().requestAuthorization(profile: profile)
+                return nil
+            }
+
+            let trackedFrom = profile.health.activityTrackingStartDay
+            profile.health.usesActivityForExpenditure = false
+            profile.health.activityTrackingStartDay = nil
+            try saveProfile(profile)
+
+            await stopActivityMonitor()
+            let removed = try removeActivityEntries(since: trackedFrom)
+            return removed > 0
+                ? "Apple Health switched off. Your imported weights and workouts were kept."
+                : nil
+        } catch let error as HealthImportError {
+            return error.userMessage
+        } catch {
+            return "Couldn't update Apple Health settings: \(error.localizedDescription)"
+        }
+    }
+
+    /// Switches measured activity — the Move figure driving the calorie target — on or off.
+    ///
+    /// On: records today as the day the numbers changed meaning (see
+    /// `GoalCalculator.Inputs.netCaloriesValidFrom`), starts the observer, and pulls the day's
+    /// activity in immediately so the target reflects it before the user leaves Settings.
+    ///
+    /// Off: removes the synthesised activity entries. They cannot be left behind — the activity
+    /// multiplier comes back at the same moment, and the two together would count the same
+    /// movement twice, in the user's history as well as today.
+    ///
+    /// - Returns: a sentence to show the user, or nil when there is nothing worth saying.
+    @discardableResult
+    func setMeasuredActivity(_ isOn: Bool) async -> String? {
+        do {
+            var profile = try stores.settings.profile()
+            guard profile.health.isEnabled else { return HealthImportError.switchedOff.userMessage }
+
+            if isOn {
+                profile.health.usesActivityForExpenditure = true
+                profile.health.activityTrackingStartDay = Day.today()
+                try saveProfile(profile)
+
+                try await startActivityMonitor()
+                await refreshHealthActivity()
+                return nil
+            }
+
+            let trackedFrom = profile.health.activityTrackingStartDay
+            profile.health.usesActivityForExpenditure = false
+            profile.health.activityTrackingStartDay = nil
+            try saveProfile(profile)
+
+            await stopActivityMonitor()
+            _ = try removeActivityEntries(since: trackedFrom)
+            return nil
+        } catch let error as HealthImportError {
+            return error.userMessage
+        } catch {
+            return "Couldn't update Apple Health settings: \(error.localizedDescription)"
+        }
+    }
+
+    /// Starts the observer if the user's switches call for it. Safe to call on every launch.
+    func startActivityMonitorIfEnabled() async {
+        guard let profile = try? stores.settings.profile(), profile.usesMeasuredActivity else {
+            return
+        }
+        try? await startActivityMonitor()
+    }
+
+    private func startActivityMonitor() async throws {
+        guard HealthKitImporter.isAvailable else { throw HealthImportError.unavailable }
+        guard activityMonitor == nil else { return }
+
+        let monitor = HealthActivityMonitor { [weak self] in
+            guard let self else { return }
+            await self.refreshHealthActivity()
+        }
+        activityMonitor = monitor
+
+        do {
+            try await monitor.start()
+        } catch {
+            // Nothing is observing, so nothing should claim to be. Foregrounding still
+            // refreshes, which is the part the user notices.
+            activityMonitor = nil
+            throw error
+        }
+    }
+
+    private func stopActivityMonitor() async {
+        guard let monitor = activityMonitor else { return }
+        activityMonitor = nil
+        await monitor.stop()
+    }
+
+    /// Removes the everyday-activity entries Tally synthesised, from `start` onward.
+    ///
+    /// Scoped to the tracked range rather than to all of history, so this can only ever reach
+    /// rows this app wrote for this feature. Falls back to the goal engine's own window when the
+    /// start day is missing, which is as far back as an activity entry could be affecting a
+    /// number the user sees.
+    private func removeActivityEntries(since start: Day?) throws -> Int {
+        let today = Day.today()
+        let from = start
+            ?? today.adding(days: -GoalCalculator.Inputs.netCalorieWindowDays)
+        let stale = try stores.entries.entries(from: from, through: today)
+            .filter { HealthImport.isActivityIdentifier($0.externalIdentifier ?? "") }
+
+        for entry in stale {
+            try stores.entries.delete(id: entry.id)
+        }
+        return stale.count
+    }
+
+    private func saveProfile(_ profile: UserProfile) throws {
+        // The store broadcasts `.settings` itself, which is what makes every screen's goal
+        // recompute against the new multiplier without Settings having to tell them.
+        try stores.settings.save(profile)
     }
 
     /// Hands the requested compose mode to the Log screen, clearing it in the same step.

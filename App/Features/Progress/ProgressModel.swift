@@ -92,17 +92,9 @@ final class ProgressModel {
                 ?? stores.weights.latestSample(onOrBefore: today)?.pounds
                 ?? 170
 
-            goal = GoalCalculator.dailyGoal(GoalCalculator.Inputs(
-                profile: profile,
-                settings: settings,
-                weightSamples: samples,
-                dailyNetCalories: try stores.entries
-                    .totals(from: today.adding(days: -365, calendar: calendar), through: today)
-                    .mapValues(\.netCalories),
-                today: today,
-                now: Date(),
-                calendar: calendar
-            ))
+            goal = GoalCalculator.dailyGoal(
+                try GoalCalculator.Inputs(stores: stores, today: today, calendar: calendar)
+            )
         } catch {
             trend = WeightTrend(samples: [])
             goal = nil
