@@ -114,6 +114,56 @@ struct SpeechTranscriberTests {
         #expect(transcriber.transcript == "two eggs and toast")
     }
 
+    /// The bug this accumulation exists for. The recogniser stops revising an utterance the
+    /// moment the speaker pauses and reports whatever is said next from nothing — so a meal
+    /// listed out loud, which is the way anyone lists a meal, used to reach the field as only the
+    /// words after the last pause and everything else was simply gone.
+    @Test("keeps every utterance of a session, not just the last")
+    func accumulatesUtterancesAcrossPauses() async {
+        let engine = FakeVoiceEngine()
+        let transcriber = SpeechTranscriber(engine: engine)
+
+        await transcriber.start()
+
+        engine.send(.transcript("two eggs"))
+        await settle { !transcriber.transcript.isEmpty }
+        engine.send(.finalized("two eggs"))
+        await settle { transcriber.transcript == "two eggs" }
+
+        // A second utterance, which arrives knowing nothing of the first.
+        engine.send(.transcript("sourdough"))
+        await settle { transcriber.transcript.contains("sourdough") }
+        // Revised while it is still being said, which replaces it rather than repeating it.
+        engine.send(.transcript("sourdough toast"))
+        await settle { transcriber.transcript.contains("toast") }
+        #expect(transcriber.transcript == "two eggs, sourdough toast")
+
+        engine.send(.finalized("sourdough toast"))
+        engine.send(.transcript("and a black coffee"))
+        await settle { transcriber.transcript.contains("coffee") }
+
+        #expect(transcriber.transcript == "two eggs, sourdough toast, and a black coffee")
+    }
+
+    /// A session is one log. Carrying the last one's words into the next would put someone's
+    /// breakfast in front of their lunch.
+    @Test("a new session starts from nothing")
+    func newSessionForgetsTheLast() async {
+        let engine = FakeVoiceEngine()
+        let transcriber = SpeechTranscriber(engine: engine)
+
+        await transcriber.start()
+        engine.send(.finalized("two eggs"))
+        await settle { !transcriber.transcript.isEmpty }
+        transcriber.stop()
+
+        await transcriber.start()
+        engine.send(.transcript("a black coffee"))
+        await settle { !transcriber.transcript.isEmpty }
+
+        #expect(transcriber.transcript == "a black coffee")
+    }
+
     /// The bug this file exists for. A start that threw part-way used to return without tearing
     /// down, because `stop` first checked whether anything was recording — and nothing was, yet.
     /// Whatever the engine had already set up stayed set up, and took the next attempt with it.
@@ -284,5 +334,37 @@ struct SpeechTranscriberTests {
             #expect(error.userMessage.hasSuffix("."))
             #expect(!error.userMessage.contains("Error"))
         }
+    }
+}
+
+/// Running the pieces of a spoken log together.
+///
+/// The separator is not cosmetic: one send is split into entries by reading the words, so whether
+/// two utterances meet with a space or a comma decides whether they become one entry or two.
+@Suite("Voice transcript joining")
+struct VoiceTranscriptTests {
+    @Test("separates two utterances with a comma, so they read as two things")
+    func joinsWithAComma() {
+        #expect(VoiceTranscript.joined("two eggs", "toast") == "two eggs, toast")
+    }
+
+    /// Dictation puts real punctuation in, and a comma after a full stop is a typo the user
+    /// didn't make.
+    @Test("leaves punctuation the speaker dictated alone")
+    func keepsExistingPunctuation() {
+        #expect(VoiceTranscript.joined("two eggs.", "toast") == "two eggs. toast")
+        #expect(VoiceTranscript.joined("two eggs,", "toast") == "two eggs, toast")
+    }
+
+    @Test("a missing side is no separator at all")
+    func handlesEmptySides() {
+        #expect(VoiceTranscript.joined("", "toast") == "toast")
+        #expect(VoiceTranscript.joined("two eggs", "") == "two eggs")
+        #expect(VoiceTranscript.joined("   ", "\n") == "")
+    }
+
+    @Test("trims the whitespace either side arrives with")
+    func trimsSurroundingWhitespace() {
+        #expect(VoiceTranscript.joined(" two eggs ", " toast ") == "two eggs, toast")
     }
 }

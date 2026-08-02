@@ -25,6 +25,13 @@ struct LogScreen: View {
     /// Whether the current draft originated from speech. Set when a transcript populates the
     /// field and cleared on send, so entries record how they were actually captured.
     @State private var draftCameFromVoice = false
+    /// What was in the field when the current voice session started.
+    ///
+    /// Speech extends the draft rather than replacing it. A second dictation is usually the rest
+    /// of the same log — the recogniser stops at a long pause, and people remember the third
+    /// thing they ate after they've said the first two — so starting one by clearing the field
+    /// is how everything said before it used to disappear, leaving only the last thing spoken.
+    @State private var draftBeforeVoice = ""
     /// The photo attached to the draft, if any. Nil is the overwhelmingly common case, which is
     /// why the thumbnail row only exists when it isn't.
     @State private var photo: CapturedPhoto?
@@ -70,12 +77,16 @@ struct LogScreen: View {
         }
         // Mirror the live transcript into the field so the user can see what was heard and fix
         // it before sending — on-device recognition is less accurate, and an editable draft is
-        // what makes that acceptable.
+        // what makes that acceptable. Behind whatever was already there, so a dictation adds to
+        // the log rather than becoming the whole of it.
+        //
+        // Deliberately not conditioned on `isRecording`: the last words of a session and the end
+        // of that session land in the same view update, and reading the flag here dropped them.
+        // The transcriber writes nothing once it has stopped, which is the guard that matters.
         .onChange(of: transcriber.transcript) { _, text in
-            if transcriber.isRecording, !text.isEmpty {
-                draft = text
-                draftCameFromVoice = true
-            }
+            guard !text.isEmpty else { return }
+            draft = VoiceTranscript.joined(draftBeforeVoice, text)
+            draftCameFromVoice = true
         }
         .onChange(of: libraryItem) { _, item in
             guard let item else { return }
@@ -368,8 +379,7 @@ struct LogScreen: View {
     /// `transcriber.start()` says why instead, and the keyboard is the fallback that still lets
     /// the log they came to make happen.
     private func startVoice() async {
-        draft = ""
-        draftCameFromVoice = false
+        draftBeforeVoice = draft
         await transcriber.start()
         if !transcriber.isRecording { await focusCompose() }
     }
@@ -408,6 +418,7 @@ struct LogScreen: View {
 
         draft = ""
         draftCameFromVoice = false
+        draftBeforeVoice = ""
         photo = nil
         photoError = nil
         transcriber.stop()

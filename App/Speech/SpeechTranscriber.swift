@@ -19,7 +19,7 @@ import Observation
 @Observable
 @MainActor
 final class SpeechTranscriber {
-    /// Live transcript, updated as the user speaks.
+    /// Live transcript of the whole session, updated as the user speaks.
     private(set) var transcript = ""
     private(set) var isRecording = false
     private(set) var errorMessage: String?
@@ -42,6 +42,15 @@ final class SpeechTranscriber {
     /// prompt is a long suspension the first time round, and `isRecording` is still false
     /// throughout it, so without this a second tap starts a second session on top of the first.
     private var isStarting = false
+    /// The utterances of this session that the recogniser has settled on, run together.
+    ///
+    /// Kept apart from ``transcript`` because the recogniser revises an utterance for as long as
+    /// it is being said and stops revising it the moment the speaker pauses. Everything after
+    /// that pause is a *new* utterance, reported from nothing — so mirroring the latest one
+    /// straight into ``transcript`` showed only the thing said most recently, and dropped
+    /// everything logged in the same breath before it. Adding them up is what makes "two eggs …
+    /// toast … and a black coffee" one send with three entries in it.
+    private var settledUtterances = ""
 
     init(engine: any VoiceEngine = SystemVoiceEngine()) {
         self.engine = engine
@@ -67,6 +76,7 @@ final class SpeechTranscriber {
         defer { isStarting = false }
 
         transcript = ""
+        settledUtterances = ""
         errorMessage = nil
 
         do {
@@ -106,7 +116,10 @@ final class SpeechTranscriber {
     private func apply(_ update: VoiceUpdate) {
         switch update {
         case .transcript(let text):
-            transcript = text
+            transcript = VoiceTranscript.joined(settledUtterances, text)
+        case .finalized(let text):
+            settledUtterances = VoiceTranscript.joined(settledUtterances, text)
+            transcript = settledUtterances
         case .ended(let failed):
             // A failure that arrives after something was heard isn't worth saying: the words are
             // in the field, editable, which is what the user came for. One that arrives with
@@ -121,10 +134,34 @@ final class SpeechTranscriber {
 
 /// What a running voice session reports back.
 enum VoiceUpdate: Sendable {
-    /// Everything heard so far, sent again on every change.
+    /// The utterance being spoken now, as heard so far and sent again on every revision. Only
+    /// this utterance — anything settled by an earlier ``finalized`` is not repeated.
     case transcript(String)
-    /// The session ended on its own — a final result, or recognition giving up.
+    /// The recogniser has stopped revising an utterance, because the speaker paused. The session
+    /// carries on; the next ``transcript`` starts the next utterance from nothing.
+    case finalized(String)
+    /// The session ended on its own — recognition gave up, or the microphone went away.
     case ended(failed: Bool)
+}
+
+/// How the pieces of a spoken log are run together.
+enum VoiceTranscript {
+    /// Joins two things the user said into one description.
+    ///
+    /// With a comma, not a space. The two are separate things, said with a pause between them,
+    /// and one send is split into entries by reading the words: "two eggs toast" is one odd
+    /// breakfast to a parser, while "two eggs, toast" is the two entries that were actually
+    /// spoken. Punctuation the speaker dictated themselves stands as it is rather than gaining a
+    /// comma after it.
+    static func joined(_ existing: String, _ addition: String) -> String {
+        let existing = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        let addition = addition.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !existing.isEmpty else { return addition }
+        guard !addition.isEmpty else { return existing }
+
+        let alreadyPunctuated = existing.last.map { ",.!?;:–—".contains($0) } ?? false
+        return existing + (alreadyPunctuated ? " " : ", ") + addition
+    }
 }
 
 /// The microphone and the on-device recogniser, behind one protocol.
