@@ -54,6 +54,16 @@ final class AppEnvironment {
         ProcessInfo.processInfo.arguments.contains("--uitesting")
     }
 
+    /// The one environment this process runs on.
+    ///
+    /// The scene used to own it outright, which is fine right up until there is no scene: iOS
+    /// wakes Tally for a Health update by *launching* it, and a background launch connects no
+    /// window at all. Anything reachable only from a view therefore doesn't exist on the launches
+    /// that keep the widgets honest — see ``handleLaunch()``. Shared rather than built twice so
+    /// the launch and the window are looking at one set of stores, not two connections to the
+    /// same file with two change broadcasters between them.
+    static let shared = AppEnvironment()
+
     init() {
         // UI tests get a memory-only store, for the reason given in `BannerDismissals`.
         let dismissals = BannerDismissals(defaults: Self.isUITesting ? nil : .standard)
@@ -102,6 +112,32 @@ final class AppEnvironment {
         self.stores = previewStores
         self.parser = parser
         self.bannerDismissals = BannerDismissals(defaults: nil)
+    }
+
+    // MARK: Launch
+
+    /// The work a launch owes whether or not a window ever appears.
+    ///
+    /// Registering the Health observer is the part that cannot wait for a scene, and that is the
+    /// whole reason this exists. Background delivery — what the entitlement notes in the README
+    /// describe as letting "iOS wake Tally when Health data changes, so the day's movement reaches
+    /// your target and your widgets without opening the app" — delivers by launching the app with
+    /// no scene attached. Started from a view's `.task`, as it was, the observer was therefore
+    /// never registered on precisely the launches it was written for: the update went unhandled,
+    /// nothing was written, no reload was sent, and every widget went on showing the numbers from
+    /// before the workout until the app was next opened by hand.
+    ///
+    /// The Lock Screen is where that shows up, because it is the one surface people read without
+    /// opening anything — the Home Screen tiles are usually seen just after a visit to the app,
+    /// which is what had already brought them up to date.
+    ///
+    /// Registering is enough on its own: an observer that comes up with an update outstanding
+    /// fires immediately, which runs the sync and reloads the widgets. This launch's *own*
+    /// reading stays with the scene, where there is a screen waiting for it.
+    ///
+    /// A no-op unless the user switched measured activity on.
+    func handleLaunch() async {
+        await startActivityMonitorIfEnabled()
     }
 
     // MARK: Banners

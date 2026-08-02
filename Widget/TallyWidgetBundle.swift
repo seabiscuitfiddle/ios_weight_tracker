@@ -20,10 +20,15 @@ struct TallySnapshot: TimelineEntry {
     var proteinTarget: Double
     var fiberTarget: Double
 
-    var remaining: Int? { goalCalories.map { totals.remaining(against: $0) } }
+    /// The number and kicker the home-screen ring leads with. Shared by both of them, so the
+    /// 2×2 tile and the wide one cannot caption the same calories differently.
+    var ringContent: NetRingContent {
+        NetRingContent(netCalories: totals.netCalories, goalCalories: goalCalories)
+    }
+
     var progress: Double { goalCalories.map { totals.progress(against: $0) } ?? 0 }
 
-    /// Shown in the widget gallery and while the real data loads.
+    /// Shown in the widget gallery, where there is no "today" to show yet.
     static let placeholder = TallySnapshot(
         date: Date(),
         totals: DayTotals(
@@ -41,7 +46,17 @@ struct TallySnapshot: TimelineEntry {
 /// **Read-only**, deliberately: a widget timeline has no business migrating a schema or writing
 /// a row, and opening read-only makes that structural rather than a rule to remember.
 struct TallyTimelineProvider: TimelineProvider {
-    func placeholder(in context: Context) -> TallySnapshot { .placeholder }
+    /// The gallery gets the sample day; a widget the user has actually placed gets their own
+    /// numbers.
+    ///
+    /// WidgetKit draws this while the first timeline is still being built — the first frame of a
+    /// widget just added to the Home Screen — and returning the sample there meant a new tile
+    /// started life showing somebody else's calories remaining before snapping to the real ones.
+    /// The read is the same local one the timeline does, so it costs what that costs, and when it
+    /// fails the views fall back to the empty state rather than to an invented number.
+    func placeholder(in context: Context) -> TallySnapshot {
+        context.isPreview ? .placeholder : load()
+    }
 
     func getSnapshot(in context: Context, completion: @escaping (TallySnapshot) -> Void) {
         completion(context.isPreview ? .placeholder : load())

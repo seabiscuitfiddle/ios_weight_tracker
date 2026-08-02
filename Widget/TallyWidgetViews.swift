@@ -107,13 +107,11 @@ struct TallySummaryView: View {
     }
 
     @ViewBuilder private var ring: some View {
-        NetCalorieRing(
-            value: TallyFormat.calories(entry.remaining ?? entry.totals.netCalories),
-            label: entry.remaining == nil ? "NET" : "CAL LEFT",
-            progress: entry.progress
-        )
-        .frame(width: ringDiameter, height: ringDiameter)
-        .accessibilityHidden(true)
+        let content = entry.ringContent
+
+        NetCalorieRing(value: content.value, label: content.label, progress: entry.progress)
+            .frame(width: ringDiameter, height: ringDiameter)
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder private var bars: some View {
@@ -217,27 +215,19 @@ struct NetRingView: View {
         .foregroundStyle(Color(token: Palette.text))
     }
 
+    /// The same number, the same kicker and the same wording as the wide widget's ring — the
+    /// point of ``NetRingContent``. The goal itself is no longer spelled out beneath the number:
+    /// "OF 2,100" under a count of what's *left* read as a day already eaten, and the arc around
+    /// it is what carries the goal here, exactly as it does on the wide tile.
     @ViewBuilder private var ring: some View {
-        NetCalorieRing(
-            value: TallyFormat.calories(entry.remaining ?? entry.totals.netCalories),
-            label: subLabel,
-            progress: entry.progress
-        )
-        // Unlike the summary widget, the ring is not decorative here — there are no bars behind
-        // it carrying the same numbers, so it has to be the accessible element.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Net calories")
-        .accessibilityValue(
-            entry.goalCalories.map {
-                TallyFormat.progressPair(entry.totals.netCalories, of: $0)
-            } ?? TallyFormat.calories(entry.totals.netCalories)
-        )
-    }
+        let content = entry.ringContent
 
-    /// "OF 2,100" against a goal, matching the design; "NET" when there is no goal to count
-    /// toward, matching the summary widget's fallback.
-    private var subLabel: String {
-        entry.goalCalories.map { "OF \(TallyFormat.calories($0))" } ?? "NET"
+        NetCalorieRing(value: content.value, label: content.label, progress: entry.progress)
+            // Unlike the summary widget, the ring is not decorative here — there are no bars
+            // behind it carrying the same numbers, so it has to be the accessible element.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(content.accessibilityLabel)
+            .accessibilityValue(content.accessibilityValue)
     }
 }
 
