@@ -3,7 +3,12 @@ import TallyCore
 
 @main
 struct TallyApp: App {
-    @State private var environment = AppEnvironment()
+    // Carries the work a launch owes even when no window is coming — a Health update arrives by
+    // waking the app, and that wake connects no scene. See TallyAppDelegate.
+    @UIApplicationDelegateAdaptor(TallyAppDelegate.self) private var appDelegate
+    // The same instance the delegate wakes, so a background launch and the window on screen share
+    // one set of stores rather than opening the database twice.
+    @State private var environment = AppEnvironment.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -21,14 +26,12 @@ struct TallyApp: App {
                 .task {
                     await WidgetRefresher().observe(environment.stores.changes.stream())
                 }
-                // Background delivery has to be re-registered every launch — the system keeps
-                // the subscription, not the query — and this launch's own reading is wanted
-                // straight away, since `onChange` below doesn't fire for the phase the app
-                // starts in. Both are no-ops unless the user switched activity on.
-                .task {
-                    await environment.startActivityMonitorIfEnabled()
-                    await environment.refreshHealthActivity()
-                }
+                // This launch's own reading, wanted straight away because `onChange` below
+                // doesn't fire for the phase the app starts in. Only the reading: re-registering
+                // background delivery belongs to the launch rather than to the window, since the
+                // launches that need it most have no window — see TallyAppDelegate. A no-op
+                // unless the user switched activity on.
+                .task { await environment.refreshHealthActivity() }
                 // Background delivery is hourly at best, so returning to the app is what makes
                 // the day's activity look live. Cheap when nothing has moved: unchanged days
                 // aren't written, so this usually costs one Health read and no widget reload.
