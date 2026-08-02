@@ -622,7 +622,11 @@ and the two together would double-count. Imported weights and workouts are alway
 
 **Voice** transcribes on the device (`requiresOnDeviceRecognition`). Audio never leaves the phone —
 only the resulting text, and only if you send it. The transcript lands in the editable field first,
-which is what makes on-device accuracy acceptable.
+which is what makes on-device accuracy acceptable. Listing a meal has pauses in it and the
+recogniser finalises a result at every one, so a session is several recognition requests run
+together behind one tap of the button — and dictating again adds to the field rather than
+replacing what is in it. Everything said reaches the parser as one send, which is what lets it come
+back as an entry per item rather than an entry for the last thing you mentioned.
 
 **Photo** capture takes the camera or the library, downscales to a 1024pt long edge and re-encodes
 as JPEG before sending. A full-resolution capture is several megabytes that no vision model reads
