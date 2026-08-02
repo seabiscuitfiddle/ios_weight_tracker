@@ -235,14 +235,22 @@ crash, not a degraded feature.
 Tally requests **read-only** Health access and never writes back, so
 `NSHealthUpdateUsageDescription` is not required.
 
-Health activity also needs the **HealthKit Background Delivery** capability, which is what lets
-the day's movement reach your target and your widgets without opening the app. It is a separate
-tick box on the App ID: enabling it in the portal is not enough on its own, because the
-provisioning profile embeds the capabilities as they stood when it was generated. If you added
-it to an existing App ID, **regenerate the app's provisioning profile** and update
-`IOS_PROVISION_PROFILE_BASE64` before the next TestFlight run — CI builds with signing off and
-will not catch a stale profile, so the failure lands at archive time. The widget's profile is
-unaffected.
+Health activity additionally declares `com.apple.developer.healthkit.background-delivery` in
+`App/Tally.entitlements`. That is what lets iOS wake Tally when Health data changes, so the
+day's movement reaches your target and your widgets without opening the app.
+
+It is not a separate capability to enable: the App ID's HealthKit capability issues it, so a
+profile generated for a HealthKit-enabled App ID already carries it. Worth confirming rather
+than assuming, because a profile that lacks an entitlement the app declares fails at *archive*
+time — CI builds with signing off and cannot catch it:
+
+```sh
+openssl smime -verify -inform DER -noverify -in <profile>.mobileprovision 2>/dev/null \
+    | grep -o 'com\.apple\.developer\.healthkit[a-z.-]*' | sort -u
+```
+
+Expect `com.apple.developer.healthkit`, `.access` and `.background-delivery` in the app's
+profile. The widget's profile needs none of them.
 
 ### 4. URL scheme
 
