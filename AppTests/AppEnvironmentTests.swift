@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import Testing
 import TallyCore
+import UIKit
 @testable import Tally
 
 /// Tests for the app target itself.
@@ -232,6 +233,57 @@ struct AppEnvironmentTests {
         // the switch. Either way the import does not run.
         #expect(message == HealthImportError.switchedOff.userMessage
             || message == HealthImportError.unavailable.userMessage)
+    }
+}
+
+/// Records that the launch work ran. A class so the closure can write to it, and `@MainActor` so
+/// it is `Sendable` enough to be captured by one — everything about a launch is main-actor work
+/// anyway.
+@MainActor
+private final class LaunchRecord {
+    private(set) var ran = false
+
+    func record() { ran = true }
+}
+
+/// What a launch has to do before any window exists.
+///
+/// The reported bug: a workout that happened while Tally was closed never reached the widgets, so
+/// the Lock Screen — the one surface people read without opening anything — kept showing the
+/// numbers from before it. iOS delivers that workout by launching the app in the background, and
+/// a background launch connects no scene, so the Health observer that used to be started from the
+/// scene's root was never started on exactly the launches it was written for.
+///
+/// HealthKit itself is unreachable from a test, so what is provable here is the wiring: that the
+/// work hangs off the launch and not off a view appearing.
+@MainActor
+@Suite("App launch")
+struct AppLaunchTests {
+    @Test("a launch does its work without waiting for a window")
+    func launchWorkDoesNotNeedAScene() async {
+        let delegate = TallyAppDelegate()
+        let record = LaunchRecord()
+        delegate.launch = { record.record() }
+
+        let handled = delegate.application(
+            UIApplication.shared, didFinishLaunchingWithOptions: nil
+        )
+        await delegate.launchTask?.value
+
+        #expect(handled)
+        #expect(record.ran)
+    }
+
+    /// Nothing about a launch may touch Health for a user who hasn't switched it on — the observer
+    /// that would raise the permission prompt least of all.
+    @Test("the launch work leaves an install without Health alone")
+    func launchIsInertWithoutHealth() async throws {
+        let environment = AppEnvironment(previewStores: .inMemory())
+
+        await environment.handleLaunch()
+
+        #expect(try environment.stores.settings.profile().usesMeasuredActivity == false)
+        #expect(try environment.stores.entries.entries(on: Day.today()).isEmpty)
     }
 }
 
