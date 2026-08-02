@@ -469,6 +469,70 @@ struct RingMetricsTests {
     }
 }
 
+/// The other half of the ring: ``RingMetrics`` decides how big its type is, ``NetRingContent``
+/// decides what that type says. Both home-screen widgets take their answer from here, which is
+/// what stops the 2×2 tile and the wide one from captioning the same calories differently — the
+/// way they did when the small one read "2,100 OF 2,100" on a day nothing had been logged.
+@Suite("Net ring content")
+struct NetRingContentTests {
+    @Test("leads with what's left, and says that's what it is")
+    func remainingLeads() {
+        let content = NetRingContent(netCalories: 1220, goalCalories: 2100, locale: enUS)
+
+        #expect(content.value == "880")
+        #expect(content.label == "CAL LEFT")
+    }
+
+    /// The regression the 2×2 widget shipped with. Its kicker spelled the goal out — "OF 2,100" —
+    /// under a number that was what *remained*, so an untouched day showed the goal against the
+    /// goal and looked like a day already spent, and every entry logged made it count down.
+    @Test("reads as a whole day left, not a whole day eaten, before anything is logged")
+    func untouchedDay() {
+        let content = NetRingContent(netCalories: 0, goalCalories: 2100, locale: enUS)
+
+        #expect(content.value == "2,100")
+        #expect(content.label == "CAL LEFT")
+        // Nothing in the caption may restate the goal: beside a remaining count it reads as a
+        // consumed one.
+        #expect(content.label.contains("2,100") == false)
+    }
+
+    /// Passing the goal is a fact about the day, not an error state — the same reason
+    /// ``DayTotals/remaining(against:)`` goes negative rather than clamping.
+    @Test("goes negative once the goal is passed")
+    func overGoal() {
+        let content = NetRingContent(netCalories: 2220, goalCalories: 2100, locale: enUS)
+
+        #expect(content.value.contains("120"))
+        // Signed, rather than the bare "120" that would read as calories still available.
+        #expect(content.value != "120")
+        #expect(content.label == "CAL LEFT")
+    }
+
+    /// No goal is a failed or unfinished setup, not a zero goal. There is no "remaining" to show,
+    /// so the ring shows the net and captions it as the net.
+    @Test("falls back to the net when there is no goal to count toward")
+    func withoutAGoal() {
+        let content = NetRingContent(netCalories: 1220, goalCalories: nil, locale: enUS)
+
+        #expect(content.value == "1,220")
+        #expect(content.label == "NET")
+        #expect(content.accessibilityLabel == "Net calories")
+        #expect(content.accessibilityValue == "1,220")
+    }
+
+    /// VoiceOver used to announce the net against the goal — "1,220 / 2,100" — while the digits
+    /// on screen said 880. Whatever the wording, it has to be about the number being shown.
+    @Test("announces the number that is actually on screen")
+    func spokenValueMatchesTheDigits() {
+        let content = NetRingContent(netCalories: 1220, goalCalories: 2100, locale: enUS)
+
+        #expect(content.accessibilityLabel == "Calories remaining")
+        #expect(content.accessibilityValue == "880 of 2,100")
+        #expect(content.accessibilityValue.hasPrefix(content.value))
+    }
+}
+
 /// WCAG 2.1 contrast between a foreground token and an opaque background token.
 ///
 /// A translucent foreground is composited onto the background first, which is what the
