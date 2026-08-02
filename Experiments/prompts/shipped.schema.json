@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "description": "One entry per food or exercise identified. Empty if none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "food",
+              "exercise"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "sourceText": {
+            "type": "string",
+            "description": "The user's own words for this item alone, verbatim. Empty when there are none."
+          },
+          "calories": {
+            "type": "integer",
+            "description": "Energy for the whole portion, or burned by the exercise. Always positive."
+          },
+          "proteinGrams": {
+            "type": "number"
+          },
+          "fiberGrams": {
+            "type": "number"
+          },
+          "exerciseKind": {
+            "type": "string",
+            "enum": [
+              "cardio",
+              "strength",
+              "other",
+              "none"
+            ],
+            "description": "\"none\" for food."
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "description": "0 when not applicable or unknown."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "sourceText",
+          "calories",
+          "proteinGrams",
+          "fiberGrams",
+          "exerciseKind",
+          "durationMinutes",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "note": {
+      "type": "string",
+      "description": "One short sentence naming any assumption made, or empty."
+    }
+  },
+  "required": [
+    "items",
+    "note"
+  ],
+  "additionalProperties": false
+}

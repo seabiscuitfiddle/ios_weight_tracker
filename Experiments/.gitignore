@@ -1,0 +1,17 @@
+# Cached replies and saved runs. Regenerable, occasionally large, and a result is only
+# meaningful next to the prompt that produced it — which is tracked.
+results/*
+!results/.gitkeep
+
+# Filled in from each provider's pricing page. Local because it goes stale and because two
+# people on different plans have different numbers.
+pricing.json
+
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Notebook drafts written from the tweaking loop. Rename one to keep it.
+prompts/draft.md
+prompts/draft.schema.json

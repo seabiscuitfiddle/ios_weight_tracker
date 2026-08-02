@@ -1,0 +1,19 @@
+// Copy to `Experiments/pricing.json` and fill from each provider's own pricing page.
+//
+// Deliberately shipped empty of real numbers. List prices change often enough that a table
+// baked into the repository becomes a source of confidently wrong cost columns, which is worse
+// than blank ones — so a model with no entry here reports no cost rather than a guessed one.
+//
+// Values are USD per million tokens. Keys are model identifiers as you send them; a bare name
+// also matches a gateway-prefixed one, so "claude-haiku-4-5" covers
+// "anthropic/claude-haiku-4.5" routed through OpenRouter only if you spell it the same way —
+// when in doubt, add both.
+//
+// Strip these comment lines when you copy: the file is read as strict JSON.
+{
+  "claude-opus-5": { "input": 0.0, "output": 0.0 },
+  "claude-sonnet-5": { "input": 0.0, "output": 0.0 },
+  "claude-haiku-4-5": { "input": 0.0, "output": 0.0 },
+  "gpt-5.2-mini": { "input": 0.0, "output": 0.0 },
+  "deepseek-chat": { "input": 0.0, "output": 0.0 }
+}
