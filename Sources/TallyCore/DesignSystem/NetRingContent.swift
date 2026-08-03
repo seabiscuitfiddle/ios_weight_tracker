@@ -13,8 +13,10 @@ import Foundation
 /// value disagreed with its own digits on top of that, reading the net against the goal while
 /// the screen showed what was left of it.
 ///
-/// So the decision is made once, here, and both widgets take the answer. Two views can still
-/// draw the ring at different sizes; they can no longer disagree about what its number means.
+/// So the decision is made once, here, and every widget takes the answer — including the
+/// lock-screen rectangle, which has no ring to draw but leads with the same number and had drifted
+/// the same way, showing the net against the goal. Three views can still draw that number at
+/// different sizes; they can no longer disagree about what it means.
 public struct NetRingContent: Equatable, Sendable {
     /// The number in the hole: calories left when there is a goal to count toward, and the raw
     /// net when there isn't.

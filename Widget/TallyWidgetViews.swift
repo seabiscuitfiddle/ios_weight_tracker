@@ -2,7 +2,7 @@ import SwiftUI
 import TallyCore
 import WidgetKit
 
-/// Lock-screen widget: net calories against the goal. Design screen 1a.
+/// Lock-screen widget: what's left of the goal. Design screen 1a.
 ///
 /// `accessoryRectangular` is the two-slot family that sits beside the circular Weather and Wind
 /// complications in the design's four-slot row.
@@ -18,10 +18,21 @@ struct NetCaloriesWidget: Widget {
     }
 }
 
+/// The same number, the same kicker and the same wording as the home-screen widgets' ring — from
+/// ``NetRingContent``, so all three tiles caption the day identically.
+///
+/// It used to lead with the day's *net* over the goal — "1,000 / 2,100" — which is the one framing
+/// that makes a credit look like a penalty: log 500 calories of exercise and remaining climbs by
+/// 500 while that number falls by 500, so the lock screen contradicted every other surface at the
+/// moment the user most wanted the credit confirmed. Nothing beside the value restates the goal
+/// now, for the reason the 2×2 tile dropped its "OF 2,100": next to a count of what's left, a goal
+/// reads as what's been eaten. The bar carries the goal here, as the arc does there.
 struct NetCaloriesView: View {
     let entry: TallySnapshot
 
     var body: some View {
+        let content = entry.netContent
+
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 // The lock screen renders widgets as a monochrome stencil, so the accent colour
@@ -30,20 +41,17 @@ struct NetCaloriesView: View {
                     .font(.system(size: 10, weight: .black))
                     .frame(width: 15, height: 15)
                     .background(.tertiary)
-                Text("NET CALORIES")
+                Text(content.label)
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.8)
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(TallyFormat.calories(entry.totals.netCalories))
-                    .font(.system(size: 24, weight: .heavy))
-                if let goal = entry.goalCalories {
-                    Text("/ \(TallyFormat.calories(goal))")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(content.value)
+                .font(.system(size: 24, weight: .heavy))
+                // The backstop the ring has for the same string: a negative four-figure count on
+                // a badly overshot day is the widest this ever gets.
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
 
             if entry.goalCalories != nil {
                 ProgressView(value: entry.progress)
@@ -53,12 +61,8 @@ struct NetCaloriesView: View {
         }
         .widgetURL(DeepLink.today.url)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Net calories")
-        .accessibilityValue(
-            entry.goalCalories.map {
-                TallyFormat.progressPair(entry.totals.netCalories, of: $0)
-            } ?? TallyFormat.calories(entry.totals.netCalories)
-        )
+        .accessibilityLabel(content.accessibilityLabel)
+        .accessibilityValue(content.accessibilityValue)
     }
 }
 
@@ -107,7 +111,7 @@ struct TallySummaryView: View {
     }
 
     @ViewBuilder private var ring: some View {
-        let content = entry.ringContent
+        let content = entry.netContent
 
         NetCalorieRing(value: content.value, label: content.label, progress: entry.progress)
             .frame(width: ringDiameter, height: ringDiameter)
@@ -220,7 +224,7 @@ struct NetRingView: View {
     /// "OF 2,100" under a count of what's *left* read as a day already eaten, and the arc around
     /// it is what carries the goal here, exactly as it does on the wide tile.
     @ViewBuilder private var ring: some View {
-        let content = entry.ringContent
+        let content = entry.netContent
 
         NetCalorieRing(value: content.value, label: content.label, progress: entry.progress)
             // Unlike the summary widget, the ring is not decorative here — there are no bars
