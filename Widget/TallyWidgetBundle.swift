@@ -20,9 +20,10 @@ struct TallySnapshot: TimelineEntry {
     var proteinTarget: Double
     var fiberTarget: Double
 
-    /// The number and kicker the home-screen ring leads with. Shared by both of them, so the
-    /// 2×2 tile and the wide one cannot caption the same calories differently.
-    var ringContent: NetRingContent {
+    /// The number and kicker every tile leads with. Shared by all three — the two home-screen
+    /// rings and the lock-screen rectangle — so they cannot caption the same calories
+    /// differently, which is exactly what the lock screen did while it showed the net.
+    var netContent: NetRingContent {
         NetRingContent(netCalories: totals.netCalories, goalCalories: goalCalories)
     }
 

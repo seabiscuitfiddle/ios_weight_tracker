@@ -470,9 +470,10 @@ struct RingMetricsTests {
 }
 
 /// The other half of the ring: ``RingMetrics`` decides how big its type is, ``NetRingContent``
-/// decides what that type says. Both home-screen widgets take their answer from here, which is
-/// what stops the 2×2 tile and the wide one from captioning the same calories differently — the
-/// way they did when the small one read "2,100 OF 2,100" on a day nothing had been logged.
+/// decides what that type says. All three widgets take their answer from here, which is what stops
+/// them from captioning the same calories differently — the way they did when the 2×2 tile read
+/// "2,100 OF 2,100" on a day nothing had been logged, and when the lock screen showed the net
+/// against the goal while the other two showed what was left.
 @Suite("Net ring content")
 struct NetRingContentTests {
     @Test("leads with what's left, and says that's what it is")
@@ -495,6 +496,31 @@ struct NetRingContentTests {
         // Nothing in the caption may restate the goal: beside a remaining count it reads as a
         // consumed one.
         #expect(content.label.contains("2,100") == false)
+    }
+
+    /// The lock screen's regression, and the reason its number now comes from here too. That
+    /// widget led with the day's *net* against the goal, so an exercise credit moved the number it
+    /// showed 500 calories the wrong way — down — at the same moment the home-screen tiles counted
+    /// 500 more available. Both readings are arithmetically true; only one of them answers the
+    /// question a calorie widget is glanced at to answer.
+    @Test("counts an exercise credit as calories gained, not spent")
+    func exerciseCredit() {
+        let goal = 2100
+        let eaten = DayTotals(foodCalories: 1500, entryCount: 1)
+        let afterAWalk = DayTotals(foodCalories: 1500, exerciseCalories: 500, entryCount: 2)
+
+        let before = NetRingContent(netCalories: eaten.netCalories, goalCalories: goal, locale: enUS)
+        let after = NetRingContent(
+            netCalories: afterAWalk.netCalories, goalCalories: goal, locale: enUS
+        )
+
+        #expect(before.value == "600")
+        #expect(after.value == "1,100")
+        #expect(after.label == "CAL LEFT")
+        #expect(after.accessibilityValue == "1,100 of 2,100")
+        // The framing the lock screen used to show, pinned so the difference is explicit: the net
+        // falls by the credit, which is the number that looked like the widget was ignoring it.
+        #expect(afterAWalk.netCalories == 1000)
     }
 
     /// Passing the goal is a fact about the day, not an error state — the same reason
