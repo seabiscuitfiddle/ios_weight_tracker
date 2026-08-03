@@ -1,7 +1,0 @@
-# Experiments harness. `sync_prompt` needs none of this — it runs on a bare Python 3.11+, which
-# is what makes it safe to wire into CI.
-httpx>=0.27          # async HTTP, so a grid of a few hundred calls finishes in the time one takes
-pandas>=2.2          # results tables
-matplotlib>=3.8      # latency and accuracy plots
-jupyterlab>=4.2      # the notebook itself
-python-dotenv>=1.0   # reads Experiments/.env so keys never live in the notebook

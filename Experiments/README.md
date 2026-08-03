@@ -13,23 +13,35 @@ got.
 
 ```sh
 cd Experiments
-python3 -m venv .venv && source .venv/bin/activate   # see "If venv is missing" below
-pip install -r requirements.txt
+uv sync                      # creates .venv and installs from uv.lock
 
 cp .env.example .env         # fill in keys for the providers you want to measure
 cp pricing.example.json pricing.json   # optional, for cost columns — strip its comment lines
 
-jupyter lab notebooks/nutrition_prompt_lab.ipynb
+uv run jupyter lab notebooks/nutrition_prompt_lab.ipynb
 ```
+
+`uv run` uses the environment without activating it, which is the shortest path to a command
+that behaves the same for everyone. `source .venv/bin/activate` still works if you prefer it.
+
+Dependencies live in `pyproject.toml`; `uv.lock` pins the exact resolution and is committed, for
+the same reason `Package.resolved` is — this is an application, and two people measuring the same
+prompt should not be doing it on different pandas. `uv sync` after pulling a change to either.
+
+`uv` also supplies the interpreter, so there is no `python3.12-venv` to install and no
+`ensurepip` failure on a Debian or Ubuntu box.
 
 `.env` is already covered by the repository's `.gitignore`, which excludes `.env` and `.env.*`
 while keeping the tracked template. No key should ever land in a notebook cell.
 
-**If `venv` is missing.** On a Debian or Ubuntu box the stdlib module is packaged separately and
-`python3 -m venv` fails with an `ensurepip` error:
+**Without uv.** Nothing here imports it, and the stdlib-only paths below need no environment at
+all. For the notebook on a machine without `uv`, export a requirements file from the lock and use
+pip as before:
 
 ```sh
-sudo apt install python3.12-venv
+uv export --no-hashes --no-emit-project -o requirements.txt   # on a machine that has it
+python3 -m venv .venv && source .venv/bin/activate            # apt install python3.12-venv if this fails
+pip install -r requirements.txt
 ```
 
 ## Layout
@@ -48,7 +60,13 @@ notebooks/
 tests/
   test_offline.py   checks the harness still matches the Swift. No network, no key.
 results/          cached replies and saved runs (gitignored)
+pyproject.toml    the notebook's dependencies; uv.lock pins them
 ```
+
+`tally_eval` is deliberately not installed into the environment (`package = false`). It is
+imported from this directory, which is what lets `sync_prompt` and the tests run on an
+interpreter with nothing in it, and it keeps there from being an installed second copy that
+drifts from the tracked one.
 
 ## The baseline is generated, not copied
 
