@@ -220,7 +220,7 @@ DASHSCOPE = Provider(
 
 PROVIDERS: dict[str, Provider] = {
     provider.id: provider
-    for provider in (ANTHROPIC, OPENAI, OPENROUTER, DEEPSEEK, MOONSHOT, ZHIPU, DASHSCOPE)
+    for provider in (ANTHROPIC, OPENAI) #, OPENROUTER, DEEPSEEK, MOONSHOT, ZHIPU, DASHSCOPE)
 }
 
 
