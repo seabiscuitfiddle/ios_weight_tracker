@@ -1,0 +1,14 @@
+The shipped prompt plus four things, each aimed at a failure this dataset was built to catch:
+
+  * An explicit quantity-then-density-then-multiply order, because the per-100g answer is the
+    single most damaging error mode — it is wrong by a factor, not by a margin, and the app's
+    20,000 kcal ceiling does not catch it.
+  * A worked instance of that error ("200 g of almonds is 1160, not 579"), which the
+    `almonds-200g` case tests directly.
+  * Meal-sized anchors, so a decisive estimate has something to be decisive against.
+  * A MET formula and a default body mass for exercise, where the shipped prompt says only that
+    energy scales with mass and leaves the model to invent the rest.
+
+The cost is roughly 40% more system prompt. Since it is cacheable and identical on every
+request, the interesting question is not the tokens but whether the extra structure makes the
+model slower or more prone to reasoning aloud before the JSON.

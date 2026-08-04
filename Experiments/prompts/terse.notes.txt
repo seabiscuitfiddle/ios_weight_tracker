@@ -1,0 +1,9 @@
+Roughly a third of the shipped prompt's length, keeping every rule but dropping the reasoning
+behind each one and the worked `sourceText` example.
+
+The question it answers: is the shipped prompt's detail earning its tokens? The system prompt is
+sent on every request and marked cacheable, so the saving is small per call — but if accuracy
+holds, the shorter prompt is also the one that is easier to keep correct as the app changes.
+
+Watch the `source_text_ok_rate` column especially: the worked example is the single largest
+thing dropped here, and splitting behaviour is what it was written to fix.
