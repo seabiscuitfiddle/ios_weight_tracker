@@ -51,7 +51,30 @@ final class ProgressModel {
         self.calendar = calendar
     }
 
+    /// The headline weight: the most recent reading, exactly as it was entered.
+    ///
+    /// The raw weigh-in rather than the smoothed trend. A number labelled "current" that sits a
+    /// pound off the scale you just stood on reads as the app being wrong, whatever the smoothing
+    /// buys elsewhere — and the person who typed 168.2 has no way to tell 168.4 apart from a bug.
+    /// The trend still drives the goal and still draws the chart; it is just named where it is
+    /// shown rather than borrowing this label.
+    var currentPounds: Double? { trend.latestPounds }
+
     var currentTrendPounds: Double? { trend.currentTrendPounds }
+
+    /// The smoothed weight, spelled out under the headline so the number the goal is computed
+    /// from is on screen and named rather than appearing unexplained beside the target.
+    ///
+    /// Nil when it would only repeat the headline: the first reading seeds the trend with itself,
+    /// and a steady weight keeps the two within a rounding step of each other. Compared at the
+    /// precision actually shown, since two values that render identically are the same number as
+    /// far as the screen is concerned.
+    var trendCaption: String? {
+        guard let current = currentPounds, let smoothed = currentTrendPounds else { return nil }
+        let text = TallyFormat.weight(pounds: smoothed, unit: unit)
+        guard text != TallyFormat.weight(pounds: current, unit: unit) else { return nil }
+        return "trend \(text) \(unit.shortName)"
+    }
 
     var changeOverWindow: Double? {
         trend.trendChange(overLast: Self.windowDays, calendar: calendar)

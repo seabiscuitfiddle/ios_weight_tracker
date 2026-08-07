@@ -78,7 +78,7 @@ struct ProgressScreen: View {
         HStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 3) {
                 Kicker("current")
-                if let pounds = model.currentTrendPounds {
+                if let pounds = model.currentPounds {
                     HStack(alignment: .firstTextBaseline, spacing: Metrics.space1) {
                         Text(TallyFormat.weight(pounds: pounds, unit: model.unit))
                             .font(.tallyDisplay(46))
@@ -91,6 +91,15 @@ struct ProgressScreen: View {
                 } else {
                     Text("—")
                         .font(.tallyDisplay(46))
+                        .foregroundStyle(Color.tallySecondaryText)
+                }
+
+                // The smoothed number, named. It is what the goal and the chart are built from,
+                // so it has to stay visible — but as the trend it is, under the reading it was
+                // smoothed from, rather than as the headline it used to be.
+                if let caption = model.trendCaption {
+                    Text(caption)
+                        .font(.tallyScaled(12, weight: .semibold, relativeTo: .caption))
                         .foregroundStyle(Color.tallySecondaryText)
                 }
             }
@@ -228,6 +237,10 @@ struct ProgressScreen: View {
                         .font(.tallyFixed(17, weight: .heavy))
                         .foregroundStyle(Color.tallyText)
                     Spacer(minLength: Metrics.space2)
+                    // The trend rather than the latest reading, because the trend is what the
+                    // projection below is computed from — showing the scale's number here would
+                    // put a date under a starting point it wasn't measured against. It's the
+                    // same number the caption at the top of the screen names.
                     if let current = model.currentTrendPounds {
                         Text("\(TallyFormat.weight(pounds: current, unit: model.unit)) →")
                             .font(.tallyScaled(13, weight: .semibold))

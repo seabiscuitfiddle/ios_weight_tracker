@@ -65,10 +65,13 @@ public struct WeightTrend: Hashable, Sendable {
 
     public var isEmpty: Bool { points.isEmpty }
 
-    /// The most recent smoothed weight — what the UI should call "current weight".
+    /// The most recent smoothed weight — what the goal is computed from, and what the UI should
+    /// label "trend" rather than "current": a number that disagrees with the scale the user just
+    /// stood on has to say why it does.
     public var currentTrendPounds: Double? { points.last?.trendPounds }
 
-    /// The most recent raw weigh-in.
+    /// The most recent raw weigh-in — the reading as it was entered, and what the UI shows as the
+    /// current weight.
     public var latestPounds: Double? { points.last?.pounds }
 
     public var firstDay: Day? { points.first?.day }
