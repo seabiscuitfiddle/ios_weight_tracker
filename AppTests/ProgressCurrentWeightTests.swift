@@ -8,7 +8,7 @@ import TallyCore
 /// "Current" now means the latest weigh-in; the trend keeps its own, named line.
 @MainActor
 @Suite("Progress current weight")
-struct ProgressModelTests {
+struct ProgressCurrentWeightTests {
     /// A run of readings ending in a jump, which is exactly the case where a smoothed number and
     /// the scale disagree most visibly.
     private func stores(pounds: [Double]) -> StoreBundle {
