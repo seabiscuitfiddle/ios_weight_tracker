@@ -3,13 +3,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="./support.js"></script>
-</head>
-<body>
-<x-dc>
-<helmet data-dc-atomics>
+<title>Tally — design reference</title>
+<!-- Archivo is the design's typeface. The app bundles the .ttf files (see README, "Fonts");
+     this page fetches the same family from Google Fonts so the reference renders correctly in
+     a browser without them. The stack below it degrades to a grotesque, not to a serif. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
 <meta name="design_doc_mode" content="canvas">
-<link rel="stylesheet" href="_ds/modernist-7d1109f2-ba49-4c1c-a3fc-dd76683dadb4/styles.css">
+<style>
+  /* The Modernist design system's tokens.
+   *
+   * These were previously pulled from an external stylesheet that was never committed, which
+   * left this file unable to render anywhere. The values below are not a reconstruction by
+   * eye: they are transcribed from Sources/TallyCore/DesignSystem/Palette.swift, which is the
+   * in-repo authority for them and is covered by tests. If a value here and a value there ever
+   * disagree, Palette.swift is right and this is the copy that drifted.
+   *
+   * --color-divider is the one that is not a flat colour. The design expresses it as the text
+   * colour at 40% opacity rather than as its own hex, so that a hairline stays correct against
+   * the page, a surface, or an inverted panel alike. Palette.dividerOpacity pins the 0.4. */
+  :root {
+    --color-bg: #F3F2F2;           /* Palette.background */
+    --color-surface: #EAE9E9;      /* Palette.surface    */
+    --color-text: #201E1D;         /* Palette.text       */
+    --color-accent: #EC3013;       /* Palette.accent     */
+    --color-divider: color-mix(in srgb, #201E1D 40%, transparent);   /* Palette.dividerOpacity */
+
+    --color-neutral-100: #F8F4F4;
+    --color-neutral-300: #D7D3D3;
+    --color-neutral-500: #9B9797;
+    --color-neutral-700: #605D5D;
+    --color-neutral-900: #2D2B2B;
+
+    /* Archivo throughout — 800 for numerals and headings, 600 for labels. One family, two
+     * token names, because the design system distinguishes the roles even where the face
+     * is shared. See Typography.family. */
+    --font-heading: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-body: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+    --shadow-md: 0 2px 8px rgba(32, 30, 29, .12);
+  }
+</style>
 <style>
   body{margin:0;background:#dedbd8;font-family:var(--font-body)}
   .board{min-height:100vh}
@@ -36,10 +71,17 @@
   .hi{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);width:132px;height:5px;border-radius:100px;z-index:60}
   .sb{height:54px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 14px;font-weight:600;font-size:15px;letter-spacing:-.01em}
   .kick{font-size:10px;letter-spacing:.16em;text-transform:uppercase;font-weight:600}
-</style>
-</helmet>
 
-<div class="board" ref="{{ rootRef }}">
+  /* keyboard keys — these were three `sc-for` loops over letter arrays until the runtime that
+     expanded them went missing, at which point each row rendered as a single key showing the
+     loop variable's own name. The letters are written out in the markup below; this class
+     carries the styling that the loop body used to repeat. */
+  .key{flex:1;height:40px;background:var(--color-bg);border:1px solid var(--color-divider);display:flex;align-items:center;justify-content:center;font-size:17px;text-transform:uppercase;font-weight:500}
+</style>
+</head>
+<body>
+
+<div class="board">
 <section class="dv-turn" id="t1">
   <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Tally — a Modernist calorie &amp; exercise tracker</span></div>
   <p class="dv-sub">One net number everywhere: <strong>net calories = food − exercise</strong>, shown as <strong>x / y</strong> against a goal auto-derived from your weight target. Flat, architectural, red-on-white, Archivo throughout. Log surfaces (lock, home, in-app) all lead with the same three metrics — net calories, protein, fiber — so the number you glance at on the lock screen is the number you edit in the app. A shared bottom tab bar — Today · Log · History · Progress — ties the in-app screens together; the accented Log tab opens the AI quick-log.</p>
@@ -234,14 +276,12 @@
               <div style="position:relative;width:150px;height:150px;flex:none">
                 <svg width="150" height="150" viewBox="0 0 160 160"><circle cx="80" cy="80" r="64" fill="none" stroke="var(--color-divider)" stroke-width="15"/><circle cx="80" cy="80" r="64" fill="none" stroke="var(--color-accent)" stroke-width="15" stroke-dasharray="233.6 402.1" transform="rotate(-90 80 80)"/></svg>
                 <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
-                  <sc-if value="{{ emphRemaining }}" hint-placeholder-val="{{ true }}">
-                    <span style="font-family:var(--font-heading);font-weight:800;font-size:44px;line-height:.9;letter-spacing:-.03em">880</span>
-                    <span class="kick" style="color:color-mix(in srgb,var(--color-text) 55%,transparent);margin-top:3px">CAL LEFT</span>
-                  </sc-if>
-                  <sc-if value="{{ emphConsumed }}" hint-placeholder-val="{{ false }}">
-                    <span style="font-family:var(--font-heading);font-weight:800;font-size:40px;line-height:.9;letter-spacing:-.03em">1,220</span>
-                    <span class="kick" style="color:color-mix(in srgb,var(--color-text) 55%,transparent);margin-top:3px">NET EATEN</span>
-                  </sc-if>
+                  <!-- The ring centre had two variants behind an `emphasize` prop. Its default
+                       was "remaining", so that is the one shown here; the "consumed" variant
+                       read 1,220 / NET EATEN in the same slot. Both used to render at once
+                       without the runtime that resolved the condition. -->
+                  <span style="font-family:var(--font-heading);font-weight:800;font-size:44px;line-height:.9;letter-spacing:-.03em">880</span>
+                  <span class="kick" style="color:color-mix(in srgb,var(--color-text) 55%,transparent);margin-top:3px">CAL LEFT</span>
                 </div>
               </div>
               <div style="flex:1;display:flex;flex-direction:column;gap:10px">
@@ -385,15 +425,15 @@
           <!-- keyboard -->
           <div style="flex:none;background:var(--color-surface);border-top:1.5px solid var(--color-divider);padding:8px 5px 4px">
             <div style="display:flex;gap:5px;justify-content:center;margin-bottom:7px">
-              <sc-for list="{{ row1 }}" as="k" hint-placeholder-count="10"><div style="flex:1;height:40px;background:var(--color-bg);border:1px solid var(--color-divider);display:flex;align-items:center;justify-content:center;font-size:17px;text-transform:uppercase;font-weight:500">{{ k }}</div></sc-for>
+              <div class="key">q</div><div class="key">w</div><div class="key">e</div><div class="key">r</div><div class="key">t</div><div class="key">y</div><div class="key">u</div><div class="key">i</div><div class="key">o</div><div class="key">p</div>
             </div>
             <div style="display:flex;gap:5px;justify-content:center;margin-bottom:7px;padding:0 20px">
-              <sc-for list="{{ row2 }}" as="k" hint-placeholder-count="9"><div style="flex:1;height:40px;background:var(--color-bg);border:1px solid var(--color-divider);display:flex;align-items:center;justify-content:center;font-size:17px;text-transform:uppercase;font-weight:500">{{ k }}</div></sc-for>
+              <div class="key">a</div><div class="key">s</div><div class="key">d</div><div class="key">f</div><div class="key">g</div><div class="key">h</div><div class="key">j</div><div class="key">k</div><div class="key">l</div>
             </div>
             <div style="display:flex;gap:5px;justify-content:center;margin-bottom:7px">
               <div style="width:44px;height:40px;background:var(--color-neutral-300);display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 19 17"><path d="M9.5 1L1 9.5h4.5V16h8V9.5H18L9.5 1z" fill="var(--color-text)"/></svg></div>
               <div style="flex:1;display:flex;gap:5px">
-                <sc-for list="{{ row3 }}" as="k" hint-placeholder-count="7"><div style="flex:1;height:40px;background:var(--color-bg);border:1px solid var(--color-divider);display:flex;align-items:center;justify-content:center;font-size:17px;text-transform:uppercase;font-weight:500">{{ k }}</div></sc-for>
+                <div class="key">z</div><div class="key">x</div><div class="key">c</div><div class="key">v</div><div class="key">b</div><div class="key">n</div><div class="key">m</div>
               </div>
               <div style="width:44px;height:40px;background:var(--color-neutral-300);display:flex;align-items:center;justify-content:center"><svg width="20" height="16" viewBox="0 0 23 17"><path d="M7 1h13a2 2 0 012 2v11a2 2 0 01-2 2H7l-6-7.5L7 1z" fill="none" stroke="var(--color-text)" stroke-width="1.6"/><path d="M10 5l7 7M17 5l-7 7" stroke="var(--color-text)" stroke-width="1.6"/></svg></div>
             </div>
@@ -608,25 +648,9 @@
   <p class="dv-next">Try next: "add a weekly view to <a class="dv-oid" href="#1h">1h</a>" · "show the photo-log confirmation flow" · "let me edit a logged entry" · "try a dark-mode dashboard"</p>
 </section>
 </div>
-</x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;1500&quot;,&quot;height&quot;:&quot;1050&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#ec3013&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#ec3013&quot;,&quot;#201e1d&quot;,&quot;#1a5fb4&quot;,&quot;#2f7d4f&quot;],&quot;section&quot;:&quot;Theme&quot;},&quot;emphasize&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;remaining&quot;,&quot;options&quot;:[&quot;remaining&quot;,&quot;consumed&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Dashboard&quot;}}">
-class Component extends DCLogic {
-  _apply() {
-    if (this._root) this._root.style.setProperty('--color-accent', this.props.accent || '#ec3013');
-  }
-  componentDidUpdate() { this._apply(); }
-  renderVals() {
-    const emph = this.props.emphasize ?? 'remaining';
-    return {
-      rootRef: (el) => { if (el) { this._root = el; this._apply(); } },
-      emphRemaining: emph === 'remaining',
-      emphConsumed: emph === 'consumed',
-      row1: ['q','w','e','r','t','y','u','i','o','p'],
-      row2: ['a','s','d','f','g','h','j','k','l'],
-      row3: ['z','x','c','v','b','n','m'],
-    };
-  }
-}
-</script>
+<!-- The design-doc runtime this file was exported for has been removed, along with the
+     `sc-if` / `sc-for` markup it resolved; what it did is recorded at each of those sites
+     instead. Its one styling job was setting --color-accent from a prop whose default was
+     #ec3013 -- that is Palette.accent, and is now simply the token value above. Static page. -->
 </body>
 </html>

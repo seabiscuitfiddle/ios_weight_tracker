@@ -31,6 +31,7 @@ makes even that one call unnecessary.
 - [Keeping this repository publishable](#keeping-this-repository-publishable)
 - [GitHub Actions secrets](#github-actions-secrets)
 - [Shipping to TestFlight](#shipping-to-testflight) — installing on a phone without a Mac
+- [Publishing the design](#publishing-the-design)
 - [Project status](#project-status)
 - [License](#license)
 
@@ -400,7 +401,15 @@ Sources/TallyCore/     depends only on LLMWire — builds and tests anywhere
   Routing/             deep-link parsing
 Sources/TallyStore/    the SQLite conformances — the only target that links GRDB
 App/                   SwiftUI app (Xcode only), including the on-device parser
-Widget/                WidgetKit extension (Xcode only)
+Widget/                WidgetKit extension (Xcode only) — three widgets in one bundle:
+                       NetRingWidget (systemSmall), TallySummaryWidget (systemMedium),
+                       NetCaloriesWidget (accessoryRectangular, the lock screen)
+Experiments/           an offline Python harness for the nutrition prompt: re-runs the same
+                       system prompt, schema and lenient decoding the app uses, to measure
+                       what a prompt change does to accuracy and cost across models. Nothing
+                       in Sources/ or App/ depends on it and it ships in nothing — see
+                       Experiments/README.md.
+design/                the source design, published to GitHub Pages
 ```
 
 **Storage is behind protocols on purpose.** Feature code, view models, widgets, and intents
@@ -575,6 +584,38 @@ Apple's TestFlight app on the phone, sign in with the same Apple ID, and the bui
 
 Subsequent builds arrive automatically — one workflow run, no cable, no Mac.
 
+---
+
+## Publishing the design
+
+[`design/tally-design.html`](design/tally-design.html) is the source design — the six specified
+surfaces, at phone size. It is published to GitHub Pages by
+[`pages.yml`](.github/workflows/pages.yml), which needs no secrets and builds nothing: the file
+is self-contained, so the workflow copies it into a site directory and deploys that.
+
+**One-time setup: Settings → Pages → Source → GitHub Actions.** Without it the workflow runs
+green and publishes nothing. It then redeploys whenever anything under `design/` changes, and on
+demand from the Actions tab.
+
+The file is served as the site's index, so the Pages URL opens the design itself rather than a
+directory listing, and also under `/tally-design.html` so a direct link keeps working.
+
+It stays in `design/` rather than moving to a `docs/` folder deliberately. Publishing from where
+the file already lives leaves one copy of it instead of two that can disagree, and the Pages
+artifact route never runs Jekyll — which matters, because Jekyll silently drops any path
+starting with an underscore, and design-tool exports reference `_ds/` asset directories.
+
+> It was exported from a design tool, and referenced a `support.js` and a token stylesheet that
+> were never committed. Both are now resolved into the file: the colour and type tokens are
+> transcribed from `Sources/TallyCore/DesignSystem/Palette.swift`, which is the authority for
+> them and is covered by tests, and the tool's `sc-if` / `sc-for` templating is written out
+> statically. `pages.yml` fails the build if any of that comes back, because the symptom is a
+> page that loads with a 200 and quietly looks wrong.
+
+---
+
+## Project status
+
 | Phase | State |
 |---|---|
 | 1. Toolchain, package scaffold | Done |
@@ -583,16 +624,20 @@ Subsequent builds arrive automatically — one workflow run, no cable, no Mac.
 | 4. LLM nutrition parser | Done |
 | 5. Xcode project, design system, CI | Done — CI green on both platforms |
 | 6. Screens | Today, Log, History, Progress, Settings — build and launch |
-| 7. Widgets and deep links | Both widgets build; `.appex` validates |
+| 7. Widgets and deep links | All three widgets build; `.appex` validates |
 | 8. HealthKit, voice, Siri | Done |
 | 9. Polish, UI tests, docs | Smoke tests passing; visual polish pending |
 
-CI currently verifies, on every push:
+CI runs on **pull requests** and on demand from the Actions tab — deliberately not on every
+push, so that a work-in-progress commit doesn't occupy a macOS runner. It verifies:
 
-- **279 tests** — 263 in the package on Linux, 13 app unit tests and 3 UI tests on an iOS
-  simulator. Both LLM wire formats are covered by recorded fixtures, so no key and no network
-  are needed to verify what Tally actually sends
-- The app and widget compile, and `Tally.app` and `TallyWidget.appex` both validate
+- **The package suite on Linux** — around 390 test functions across `TallyCore`, `TallyStore`
+  and `LLMWire`, some of them parameterised and so contributing more than one case each. Both
+  LLM wire formats are covered by recorded fixtures, so no key and no network are needed to
+  verify what Tally actually sends
+- **App unit tests and UI smoke tests on an iOS simulator** — the app-side targets that cannot
+  exist on Linux: background work, speech transcription, widget refresh, app environment
+- The app and widgets compile, and `Tally.app` and `TallyWidget.appex` both validate
 - The app launches, all four tabs are reachable, and the compose field enables sending
 
 ### Health, voice, and Siri
@@ -653,29 +698,60 @@ Still to do:
 - **Visual polish against real screenshots** — see the warning above.
 
 `design/tally-design.html` is the source design, kept for reference. Open it in a browser to see
-the six specified surfaces.
+the six specified surfaces, or read it on GitHub Pages — see
+[Publishing the design](#publishing-the-design).
 
 ---
 
 ## License
 
-Copyright (C) 2026 seabiscuitfiddle.
+Copyright (C) 2026 Brian Werth (seabiscuitfiddle).
 
-[GNU General Public License v3.0](LICENSE). In short: use it, study it, change it, share it —
-but anything you distribute that is built from this code has to carry the same freedoms, source
-included.
+[GNU General Public License v3.0](LICENSE), **plus an App Store distribution exception**. In
+short: use it, study it, change it, share it — but anything you distribute that is built from
+this code has to carry the same freedoms, source included.
 
-The full text is in [`LICENSE`](LICENSE). Per-file copyright headers have deliberately not been
-added; the license file covers the work, and headers on every source file would bury the
-explanatory comments that are the point of this codebase.
+The full text is in [`LICENSE`](LICENSE), unmodified. Per-file copyright headers have
+deliberately not been added; the license file covers the work, and headers on every source file
+would bury the explanatory comments that are the point of this codebase.
 
-Three things carry their own terms and are **not** covered by it:
+### The App Store exception
+
+GPL-3.0 and the App Store are mutually exclusive by default, and this app exists to be installed
+on a phone. Sections 4, 5, 6 and 10 of the GPL forbid conveying a program under terms that
+restrict what the recipient may then do with it — and a distribution platform's terms of service
+are exactly that: a device cap, a ban on passing the binary on, and mandatory DRM, all imposed on
+whoever installs it. Apple removed VLC from the App Store in January 2011 over this precise
+conflict, after a complaint from one of its copyright holders.
+
+[`LICENSE-EXCEPTION`](LICENSE-EXCEPTION) resolves it, as an **additional permission under section
+7** of the GPL — the mechanism the license itself provides for this. It permits conveying Tally
+in binary form through an app distribution platform, and accepting that platform's terms in order
+to do so. It grants only that.
+
+Everything else survives untouched. The source stays GPL, modifications must still be released
+under it, and the Corresponding Source must still be published — shipping to the App Store is not
+an excuse not to. The permission runs to **everyone**, not just to me: fork Tally, ship your fork,
+and it is yours on the same terms. As section 7 allows, you may also strip it and distribute under
+the unmodified GPL instead.
+
+> Written to the standard shape of a section 7 additional permission, but it is a custom license
+> term and I am not a lawyer. Worth a professional read before you rely on it commercially.
+
+### Not covered
+
+Three things carry their own terms:
 
 - **Archivo**, the typeface the design uses, is under the SIL Open Font License and is not
-  redistributed here — you download it yourself (see [Fonts](#2-fonts)).
+  redistributed here — you download it yourself (see [Fonts](#2-fonts)). The OFL permits bundling
+  it in an app, including a paid one, but it requires the license text to travel with the font.
+  A submitted build therefore has to carry `OFL.txt` from the Google Fonts download, and the app
+  should credit it somewhere reachable — the usual place is an acknowledgements row in Settings.
 - **`Sources/LLMWire/`** is **MIT** licensed, not GPL — see [`Sources/LLMWire/LICENSE`](Sources/LLMWire/LICENSE).
   It is a self-contained, dependency-free library that knows nothing about Tally, kept in a form
   that can be lifted into its own repository with a `git mv`. The rest of this repository remains
   GPL-3.0.
 - **GRDB.swift**, the only third-party dependency, is MIT-licensed. Its terms are in
-  `.build/checkouts/GRDB.swift/LICENSE` after a build, and in its repository.
+  `.build/checkouts/GRDB.swift/LICENSE` after a build, and in its repository. MIT is GPL-compatible
+  and imposes none of the restrictions the App Store exception is about, but it does require its
+  copyright notice to ship with the binary — the same acknowledgements row covers it.
