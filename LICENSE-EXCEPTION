@@ -1,0 +1,114 @@
+                  TALLY APP STORE DISTRIBUTION EXCEPTION
+
+           An additional permission under section 7 of the
+                 GNU General Public License version 3
+
+              Copyright (C) 2026 Brian Werth (seabiscuitfiddle)
+
+
+The Program is Tally, licensed under the GNU General Public License
+version 3 (the "License"), whose full and unmodified text is in the
+file LICENSE beside this one.
+
+This file grants an additional permission of the kind section 7 of the
+License expressly provides for. It only ever grants. It removes no
+obligation the License places on you beyond the one it names, and it
+takes no freedom away from anyone who receives the Program. Where
+anything written here appears to conflict with the License, the
+License governs and this permission is void to that extent.
+
+
+-------------------------------------------------------------------
+WHY THIS EXISTS
+-------------------------------------------------------------------
+
+An iOS application cannot reach a phone except through a distribution
+platform, and every such platform imposes terms on the people who
+receive the software: a cap on the number of devices, a prohibition on
+passing the binary on, and a requirement that it run only under the
+platform's own signing and digital rights management.
+
+Sections 4, 5, 6 and 10 of the License forbid conveying the Program
+under exactly those conditions. Section 10 is the sharpest of them --
+"you may not impose any further restrictions on the exercise of the
+rights granted or affirmed under this License" -- and a distribution
+platform's terms of service are further restrictions, imposed on the
+recipient, as a condition of receiving the binary.
+
+The practical effect is that GPL-3.0 software and the App Store are
+mutually exclusive by default. This is not a theoretical concern:
+Apple removed VLC from the App Store in January 2011 for precisely
+this reason, after a complaint from one of its copyright holders.
+
+This exception removes that one obstacle. It does nothing else, and
+every other obligation of the License survives it untouched.
+
+
+-------------------------------------------------------------------
+THE PERMISSION
+-------------------------------------------------------------------
+
+You have permission to convey the Program in non-source form through
+an application distribution platform operated by a third party --
+Apple's App Store and TestFlight, Google Play, or any comparable
+service -- and to accept that platform's terms in order to do so, even
+where those terms would otherwise be forbidden by sections 4, 5, 6 or
+10 of the License.
+
+This permission extends specifically to:
+
+  a) submitting the Program, or a version of it modified under
+     section 5, to such a platform for review and distribution;
+
+  b) signing the Program with whatever code-signing identity the
+     platform requires, and allowing the platform to re-sign,
+     encrypt, or apply digital rights management to the binary it
+     distributes;
+
+  c) allowing the platform to impose its own terms of service on the
+     people who install the Program from it, including terms that
+     limit the number of devices, prohibit redistribution, or require
+     the platform's own digital rights management;
+
+  d) declining to provide the Installation Information described in
+     section 6 of the License, to the extent that the platform's
+     terms or the device's signing requirements make providing it
+     impossible.
+
+
+-------------------------------------------------------------------
+WHAT IS UNCHANGED
+-------------------------------------------------------------------
+
+The copyleft is intact. In particular:
+
+  1. The source stays under the GPL. Conveying the Program through a
+     distribution platform relicenses nothing, and does not relieve
+     you of section 5's requirement to license your modifications
+     under the GPL as a whole.
+
+  2. You must still make the Corresponding Source available. Shipping
+     to an app store is not an excuse not to: publish the source of
+     what you shipped, by any of the means section 6 allows.
+
+  3. This permission reaches distribution channels and nothing else.
+     It grants no right to add proprietary components, to withhold
+     modifications, or to convey the Program under another license.
+
+  4. Everyone who receives the Program's source keeps every freedom
+     the GPL gives them. This exception constrains no recipient. It
+     declines to hold a distributor responsible for terms that the
+     platform, not the distributor, is the one imposing.
+
+
+-------------------------------------------------------------------
+WHO MAY RELY ON IT
+-------------------------------------------------------------------
+
+Everyone, and not only the copyright holder. If you fork Tally and
+ship your fork to an app store, this permission is yours too, on the
+same terms and without asking.
+
+As section 7 of the License provides, you may remove this additional
+permission from any copy of the Program, or from any part of it, if
+you would rather pass it on under the unmodified GPL.

@@ -1,0 +1,83 @@
+name: Pages
+
+# Publishes design/tally-design.html — the six specified surfaces — to GitHub Pages.
+#
+# NO SECRETS ARE REQUIRED, and nothing is built. The design doc is a single self-contained HTML
+# file, so this workflow copies it into a site directory and hands that to Pages.
+#
+# Why a workflow rather than "Settings → Pages → main /docs": the /docs route would mean moving
+# the file, and design/tally-design.html is the path the README points readers at and the path
+# the design doc has had since the first commit. Publishing from where it lives keeps one
+# location for it instead of two that can drift.
+#
+# The Pages artifact route also skips Jekyll entirely, which matters more than it looks: Jekyll
+# excludes any path beginning with an underscore, and design docs of this kind reference `_ds/`
+# asset directories. Nothing here would survive that silently — it would just 404.
+#
+# ONE-TIME SETUP: Settings → Pages → Source → GitHub Actions. Without that, this workflow runs
+# green and deploys nothing.
+
+on:
+  push:
+    branches: [main]
+    # Only when the design doc itself changes. A Swift-only commit has nothing to republish.
+    paths:
+      - 'design/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Pages needs to mint an OIDC token to deploy. Contents stays read-only: this workflow never
+# writes to the repository.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and don't cancel one in flight — a half-finished deploy would leave
+# the site serving whichever files happened to have uploaded.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assemble the site
+        # The design doc becomes the site's index, so the Pages URL itself opens it rather than
+        # a directory listing or a 404. It is also copied under its own name, so the path the
+        # README gives — /tally-design.html — keeps working if anyone links it directly.
+        run: |
+          mkdir -p _site
+          cp design/tally-design.html _site/index.html
+          cp design/tally-design.html _site/tally-design.html
+
+      - name: Check the design doc is self-contained
+        # This file was exported from a design tool and once referenced a support.js and a
+        # stylesheet that were never committed, which left it unable to render anywhere at all —
+        # every colour token was undefined and the templating markup showed as literal text.
+        # Both are gone now, and this step fails the build if either comes back, because the
+        # symptom on Pages is a page that loads with a 200 and looks wrong.
+        run: |
+          if grep -qE 'support\.js|_ds/|<sc-(if|for)|\{\{' _site/index.html; then
+            echo "::error file=design/tally-design.html::Unresolved design-tool references."
+            echo "Found one of: support.js, _ds/, <sc-if>, <sc-for>, or {{ }} templating."
+            echo "These need a runtime that is not in this repository. Resolve them statically."
+            grep -nE 'support\.js|_ds/|<sc-(if|for)|\{\{' _site/index.html || true
+            exit 1
+          fi
+          echo "Self-contained: no external assets, no unresolved templating."
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
