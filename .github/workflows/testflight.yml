@@ -44,7 +44,7 @@ jobs:
     # "SDK version issue... must be built with the iOS 26 SDK or later" — so nothing earlier in
     # this workflow hints at it. macos-26 defaults to Xcode 26.5, which keeps the no-xcode-select
     # rule below intact. Apple raises this floor about once a year; the fix is a newer image.
-    runs-on: macos-26
+    runs-on: [self-hosted]
     # A fork has none of these secrets, and a run there would fail confusingly halfway through.
     if: github.repository == 'seabiscuitfiddle/ios_weight_tracker'
 

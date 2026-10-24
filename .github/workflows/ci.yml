@@ -24,7 +24,7 @@ concurrency:
 jobs:
   secrets:
     name: Secret scan
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v7
       # Cheap and first: a leaked Team ID or API key should fail in seconds, not after a
@@ -35,7 +35,7 @@ jobs:
 
   package:
     name: Package tests (Linux)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     # The official Swift image rather than a setup action. Two reasons: it pins the exact
     # toolchain developers use, and it removes a dependency on a third-party action's list of
     # known versions — asking that action for "6.3" failed with `Version "6.3" is not available`
@@ -88,7 +88,7 @@ jobs:
     # WidgetKit and AppIntents code compiles; on an older image it would prove that against an
     # older SDK than the one releases are built with, and a compile error under the shipping SDK
     # would first appear during a TestFlight upload instead of here.
-    runs-on: macos-26
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v7
 
