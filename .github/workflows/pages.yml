@@ -42,7 +42,7 @@ concurrency:
 jobs:
   deploy:
     name: Build and deploy
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

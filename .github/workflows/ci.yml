@@ -24,7 +24,7 @@ concurrency:
 jobs:
   secrets:
     name: Secret scan
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v7
       # Cheap and first: a leaked Team ID or API key should fail in seconds, not after a
@@ -34,25 +34,14 @@ jobs:
         run: ./scripts/check-secrets.sh
 
   package:
-    name: Package tests (Linux)
-    runs-on: ubuntu-24.04
-    # The official Swift image rather than a setup action. Two reasons: it pins the exact
-    # toolchain developers use, and it removes a dependency on a third-party action's list of
-    # known versions — asking that action for "6.3" failed with `Version "6.3" is not available`
-    # even though 6.3 exists, because its manifest lags releases.
-    #
-    # Must stay 6.1 or newer. GRDB's manifest requires swift-tools-version 6.1, and on an older
-    # toolchain SPM quietly resolves *backwards* to a GRDB release that predates its Linux
-    # snapshot guard, which then fails to link. See Package.swift.
-    container: swift:6.3.1
+    name: Package tests
+    runs-on: [self-hosted]
+    # Runs on the self-hosted Mac with its Xcode toolchain; there is no Docker here, so the
+    # old swift:6.3.1 Linux container is gone. Swift must stay 6.1 or newer: GRDB's manifest
+    # requires swift-tools-version 6.1, and on an older toolchain SPM quietly resolves
+    # *backwards* to a GRDB release that fails to link. See Package.swift.
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install SQLite headers
-        # GRDB compiles against <sqlite3.h>, which Debian/Ubuntu ship separately. Apple platforms
-        # get SQLite from the SDK, so this is a Linux-only prerequisite. No sudo: container steps
-        # already run as root.
-        run: apt-get update && apt-get install -y libsqlite3-dev
 
       - name: Verify toolchain
         # Kept even though the container pins the version, so that editing the image tag to
@@ -88,7 +77,7 @@ jobs:
     # WidgetKit and AppIntents code compiles; on an older image it would prove that against an
     # older SDK than the one releases are built with, and a compile error under the shipping SDK
     # would first appear during a TestFlight upload instead of here.
-    runs-on: macos-26
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v7
 
@@ -159,6 +148,7 @@ jobs:
         # CODE_SIGNING_ALLOWED=NO is what keeps this secret-free: a simulator build needs no
         # team, no certificate, and no provisioning profile.
         run: |
+          # Xcode 27.1 logs "invalidDigitCount" for the simulator runtime build 24A94425; harmless.
           set -o pipefail
           xcodebuild \
             -project Tally.xcodeproj \
@@ -167,7 +157,7 @@ jobs:
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build test | xcbeautify --renderer github-actions
+            build test 2>&1 | grep -v invalidDigitCount | xcbeautify --renderer github-actions
 
       - name: Upload test results
         if: failure()

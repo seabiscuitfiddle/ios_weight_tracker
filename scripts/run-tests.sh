@@ -74,4 +74,4 @@ xcodebuild \
     -skipPackagePluginValidation \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
-    build test 2>&1 | (xcbeautify 2>/dev/null || cat)
+    build test 2>&1 | grep -v invalidDigitCount | (xcbeautify 2>/dev/null || cat)
