@@ -148,6 +148,7 @@ jobs:
         # CODE_SIGNING_ALLOWED=NO is what keeps this secret-free: a simulator build needs no
         # team, no certificate, and no provisioning profile.
         run: |
+          # Xcode 27.1 logs "invalidDigitCount" for the simulator runtime build 24A94425; harmless.
           set -o pipefail
           xcodebuild \
             -project Tally.xcodeproj \
@@ -156,7 +157,7 @@ jobs:
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build test | xcbeautify --renderer github-actions
+            build test 2>&1 | grep -v invalidDigitCount | xcbeautify --renderer github-actions
 
       - name: Upload test results
         if: failure()

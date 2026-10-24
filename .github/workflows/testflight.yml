@@ -264,7 +264,7 @@ jobs:
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            | xcbeautify --renderer github-actions
+            2>&1 | grep -v invalidDigitCount | xcbeautify --renderer github-actions
 
       - name: Export IPA
         env:
@@ -303,7 +303,7 @@ jobs:
             -archivePath "$RUNNER_TEMP/Tally.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            | xcbeautify --renderer github-actions
+            2>&1 | grep -v invalidDigitCount | xcbeautify --renderer github-actions
 
       - name: Upload to App Store Connect
         env:
