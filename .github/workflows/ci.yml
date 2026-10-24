@@ -34,25 +34,14 @@ jobs:
         run: ./scripts/check-secrets.sh
 
   package:
-    name: Package tests (Linux)
+    name: Package tests
     runs-on: [self-hosted]
-    # The official Swift image rather than a setup action. Two reasons: it pins the exact
-    # toolchain developers use, and it removes a dependency on a third-party action's list of
-    # known versions — asking that action for "6.3" failed with `Version "6.3" is not available`
-    # even though 6.3 exists, because its manifest lags releases.
-    #
-    # Must stay 6.1 or newer. GRDB's manifest requires swift-tools-version 6.1, and on an older
-    # toolchain SPM quietly resolves *backwards* to a GRDB release that predates its Linux
-    # snapshot guard, which then fails to link. See Package.swift.
-    container: swift:6.3.1
+    # Runs on the self-hosted Mac with its Xcode toolchain; there is no Docker here, so the
+    # old swift:6.3.1 Linux container is gone. Swift must stay 6.1 or newer: GRDB's manifest
+    # requires swift-tools-version 6.1, and on an older toolchain SPM quietly resolves
+    # *backwards* to a GRDB release that fails to link. See Package.swift.
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install SQLite headers
-        # GRDB compiles against <sqlite3.h>, which Debian/Ubuntu ship separately. Apple platforms
-        # get SQLite from the SDK, so this is a Linux-only prerequisite. No sudo: container steps
-        # already run as root.
-        run: apt-get update && apt-get install -y libsqlite3-dev
 
       - name: Verify toolchain
         # Kept even though the container pins the version, so that editing the image tag to
