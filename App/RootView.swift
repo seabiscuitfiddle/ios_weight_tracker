@@ -26,6 +26,8 @@ struct RootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            ScaleStatusStrip()
+
             TallyTabBar(selection: Binding(
                 get: { environment.selectedTab },
                 set: { environment.selectedTab = $0 }

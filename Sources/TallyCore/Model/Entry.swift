@@ -9,12 +9,16 @@ public enum RecordSource: String, Hashable, Sendable, Codable, CaseIterable {
     case llmPhoto
     case llmVoice
     case healthKit
+    /// Read from a Bluetooth scale while the app was open — see `ESF24Protocol`. A
+    /// measurement rather than an estimate, and kept out of Health's way exactly as a hand
+    /// entry is: the importer never replaces a day's weight that didn't come from Health.
+    case scale
 
     /// True when a model produced the numbers, so the UI can invite the user to check them.
     public var isEstimated: Bool {
         switch self {
         case .llmText, .llmPhoto, .llmVoice: true
-        case .manual, .healthKit: false
+        case .manual, .healthKit, .scale: false
         }
     }
 }

@@ -840,3 +840,42 @@ struct EntryEditorModelTests {
         #expect(try stores.entries.entries(on: Self.pastDay).isEmpty)
     }
 }
+
+/// The scale's glue: what a finished weigh-in becomes once the protocol has delivered it. The
+/// protocol itself is tested in TallyCore's `ESF24ProtocolTests`.
+@MainActor
+@Suite("Scale readings")
+struct ScaleReadingTests {
+    @Test("a weigh-in is saved as today's weight, sourced to the scale")
+    func savesTodaysWeight() throws {
+        let environment = AppEnvironment(previewStores: .inMemory())
+
+        environment.recordScaleMeasurement(ESF24Measurement(kilograms: 80))
+
+        let sample = try #require(try environment.stores.weights.sample(on: Day.today()))
+        #expect(sample.source == .scale)
+        #expect(abs(sample.kilograms - 80) < 0.0001)
+        #expect(environment.scaleConfirmation?.failure == nil)
+        #expect(environment.scaleConfirmation.map { abs($0.pounds - sample.pounds) < 0.0001 } == true)
+    }
+
+    @Test("a reading that can't be a person is dropped")
+    func dropsImplausibleReading() throws {
+        let environment = AppEnvironment(previewStores: .inMemory())
+
+        environment.recordScaleMeasurement(ESF24Measurement(kilograms: 3.1))
+
+        #expect(try environment.stores.weights.sample(on: Day.today()) == nil)
+        #expect(environment.scaleConfirmation == nil)
+    }
+
+    @Test("the scale stays off until switched on, even in the foreground")
+    func offByDefault() {
+        let environment = AppEnvironment(previewStores: .inMemory())
+
+        environment.updateScale(isForeground: true)
+
+        #expect(!environment.isScaleEnabled)
+        #expect(environment.scale.status == .idle)
+    }
+}

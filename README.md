@@ -103,6 +103,7 @@ runs *on*, not what it is built *with*.
 | HealthKit import and activity | | A real device (Health has no simulator data) |
 | Voice input | | A real device (no simulator microphone) |
 | Siri phrases | | A real device |
+| Etekcity ESF-24 scale | | A real device (the simulator has no Bluetooth) |
 
 ### Two things you'll notice on first run
 
@@ -665,6 +666,22 @@ month. Until two weeks of comparable days accumulate, the target is formula-only
 off deletes the activity entries, because the activity multiplier comes back at the same moment
 and the two together would double-count. Imported weights and workouts are always kept.
 
+**An Etekcity ESF-24 scale** can log your weight on its own. Switch on **Log weight from scale**
+in Settings and, whenever Tally is open, stepping on the scale logs the finished reading as today's
+weight — replacing anything already logged today, as typing a number in would — and a strip above
+the tab bar says what was recorded. Tally connects only while it is in the foreground; there is no
+background Bluetooth mode, so readings taken with the app closed stay on the scale for the VeSync
+app to collect. Tally also sets the scale's display to your weight unit.
+
+The protocol is a port of the ESF-24 client in the MIT-licensed
+[`etekcity_esf551_ble`](https://pypi.org/project/etekcity-esf551-ble/) Python package, which was
+reverse-engineered from packet captures and is marked experimental there. It lives in
+`Sources/TallyCore/Scale/` as bytes-in, bytes-out logic with no CoreBluetooth in it, so it is
+tested on any platform; `App/Scale/ScaleMonitor.swift` only carries bytes between it and the radio.
+One gap against the Python client: iOS never reveals a peripheral's MAC address, so the MAC check
+that client uses to trust an advertisement isn't possible here. Tally connects to the first device
+advertising as a `QN-Scale` or carrying an ESF-24 model code — fine in a home with one scale.
+
 **Voice** transcribes on the device (`requiresOnDeviceRecognition`). Audio never leaves the phone —
 only the resulting text, and only if you send it. The transcript lands in the editable field first,
 which is what makes on-device accuracy acceptable. Listing a meal has pauses in it and the
@@ -751,6 +768,10 @@ Three things carry their own terms:
   It is a self-contained, dependency-free library that knows nothing about Tally, kept in a form
   that can be lifted into its own repository with a `git mv`. The rest of this repository remains
   GPL-3.0.
+- **The ESF-24 protocol** in `Sources/TallyCore/Scale/ESF24Protocol.swift` is ported from
+  [`etekcity_esf551_ble`](https://pypi.org/project/etekcity-esf551-ble/), © 2024 Ron Ben Yosef,
+  MIT-licensed. Its notice is reproduced at the top of that file, and like GRDB's it belongs in
+  the acknowledgements row.
 - **GRDB.swift**, the only third-party dependency, is MIT-licensed. Its terms are in
   `.build/checkouts/GRDB.swift/LICENSE` after a build, and in its repository. MIT is GPL-compatible
   and imposes none of the restrictions the App Store exception is about, but it does require its
