@@ -39,6 +39,7 @@ struct SettingsScreen: View {
             Form {
                 aiSection
                 healthSection
+                scaleSection
                 profileSection
                 goalSection
                 aboutSection
@@ -279,6 +280,45 @@ struct SettingsScreen: View {
                 would double-count energy already in your daily estimate. Switching Apple \
                 Health off keeps everything already imported.
                 """)
+        }
+    }
+
+    /// The Bluetooth scale. Applied the moment it is switched, like the Health switches: turning
+    /// it on raises the Bluetooth prompt, and the prompt belongs to that tap.
+    @ViewBuilder private var scaleSection: some View {
+        Section {
+            Toggle("Log weight from scale", isOn: Binding(
+                get: { environment.isScaleEnabled },
+                set: { environment.setScaleEnabled($0) }
+            ))
+            .accessibilityIdentifier("settings.scale")
+
+            if environment.isScaleEnabled, let status = scaleStatusText {
+                Text(status)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Etekcity scale")
+        } footer: {
+            Text("""
+                For the Etekcity ESF-24. While Tally is open, step on the scale and the reading \
+                is logged as today's weight, replacing any weight already logged today. Readings \
+                taken while Tally is closed stay on the scale for the VeSync app.
+                """)
+        }
+    }
+
+    private var scaleStatusText: String? {
+        switch environment.scale.status {
+        case .idle: nil
+        case .unauthorized: "Bluetooth access is off for Tally. Turn it on in the Settings app."
+        case .bluetoothOff: "Bluetooth is off."
+        case .unsupported: "This device can't connect to Bluetooth scales."
+        case .searching: "Looking for your scale. Step on it to wake it up."
+        case .connecting: "Connecting to your scale…"
+        case .connected: "Connected. Step on the scale."
+        case .weighing: "Weighing…"
         }
     }
 

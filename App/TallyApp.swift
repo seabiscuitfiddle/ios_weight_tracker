@@ -32,10 +32,15 @@ struct TallyApp: App {
                 // launches that need it most have no window — see TallyAppDelegate. A no-op
                 // unless the user switched activity on.
                 .task { await environment.refreshHealthActivity() }
+                // The scale listens only while the app is on screen — see
+                // `AppEnvironment.updateScale(isForeground:)`. Seeded here for the same reason
+                // as the Health read above: `onChange` misses the phase the app starts in.
+                .task { environment.updateScale(isForeground: scenePhase == .active) }
                 // Background delivery is hourly at best, so returning to the app is what makes
                 // the day's activity look live. Cheap when nothing has moved: unchanged days
                 // aren't written, so this usually costs one Health read and no widget reload.
                 .onChange(of: scenePhase) { _, phase in
+                    environment.updateScale(isForeground: phase == .active)
                     guard phase == .active else { return }
                     Task { await environment.refreshHealthActivity() }
                 }

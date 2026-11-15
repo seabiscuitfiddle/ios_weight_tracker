@@ -178,6 +178,11 @@ targets:
         # string iOS will never display should still be true if someone reads it.
         NSHealthUpdateUsageDescription: >-
           Tally only reads from Health. It does not write your weight or workouts back.
+        # Asked for only when the user switches on the smart scale in Settings — ScaleMonitor
+        # doesn't create its CBCentralManager until then, and creating one is what prompts.
+        # Foreground-only: there is deliberately no `bluetooth-central` background mode.
+        NSBluetoothAlwaysUsageDescription: >-
+          Connect to your Etekcity scale so a weigh-in is logged while Tally is open.
 
         # Archivo, added by you — see README. Both the static faces and the variable font are
         # listed because Google Fonts now ships the variable one by default; entries for files

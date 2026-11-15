@@ -41,6 +41,18 @@ final class AppEnvironment {
     private(set) var dismissedBanners: Set<StorageBanner.Severity> = []
     private let bannerDismissals: BannerDismissals
 
+    /// The Bluetooth scale. Built eagerly but inert: it touches no radio and raises no prompt
+    /// until ``updateScale(isForeground:)`` starts it, which needs the user's switch to be on.
+    let scale: ScaleMonitor
+    private var scalePreferences: ScalePreferences
+    /// Mirrors ``ScalePreferences/isEnabled`` for the same reason ``dismissedBanners`` mirrors
+    /// its store: `@Observable` can't see a write to `UserDefaults`.
+    private(set) var isScaleEnabled = false
+    /// The weigh-in just logged from the scale, shown briefly over every screen so stepping on
+    /// the scale has a visible result wherever the app was left. Cleared by the view that shows it.
+    var scaleConfirmation: ScaleConfirmation?
+    private var isForeground = false
+
     var selectedTab: DeepLink.Tab = .today
     /// Set by a deep link so the Log screen knows which compose mode to open in. Read through
     /// ``takePendingLogMode()``, which is why nothing outside this class may clear it.
@@ -72,9 +84,15 @@ final class AppEnvironment {
             dismissals.dismissed().compactMap(StorageBanner.Severity.init(rawValue:))
         )
 
+        let scalePreferences = ScalePreferences(defaults: Self.isUITesting ? nil : .standard)
+        self.scalePreferences = scalePreferences
+        self.isScaleEnabled = scalePreferences.isEnabled
+        self.scale = ScaleMonitor()
+
         if Self.isUITesting {
             self.stores = StoreBundle.inMemory()
             self.parser = StubNutritionParser()
+            connectScale()
             return
         }
 
@@ -105,6 +123,7 @@ final class AppEnvironment {
         let settings = (try? stores.settings.aiSettings()) ?? .default
         self.aiSettings = settings
         self.parser = ParserFactory.make(settings)
+        connectScale()
     }
 
     /// For previews and UI tests: entirely in memory, with a stub parser.
@@ -112,6 +131,63 @@ final class AppEnvironment {
         self.stores = previewStores
         self.parser = parser
         self.bannerDismissals = BannerDismissals(defaults: nil)
+        self.scalePreferences = ScalePreferences(defaults: nil)
+        self.scale = ScaleMonitor()
+        connectScale()
+    }
+
+    // MARK: Scale
+
+    /// Wires the scale to this environment's stores. Separate from `init` because the closures
+    /// capture `self`, which can't happen until every stored property is set.
+    private func connectScale() {
+        scale.displayUnit = { [weak self] in
+            (try? self?.stores.settings.profile().massUnit) ?? .pounds
+        }
+        scale.onMeasurement = { [weak self] measurement in
+            self?.recordScaleMeasurement(measurement)
+        }
+    }
+
+    /// Switches the scale on or off from Settings.
+    ///
+    /// Switching on while the app is open starts looking straight away — which is also what
+    /// raises the Bluetooth permission prompt, at the moment the user asked for it.
+    func setScaleEnabled(_ isEnabled: Bool) {
+        scalePreferences.isEnabled = isEnabled
+        isScaleEnabled = isEnabled
+        updateScale(isForeground: isForeground)
+    }
+
+    /// Runs the scale only while the app is in the foreground and the switch is on.
+    ///
+    /// "While the app is on" is the whole feature: there is no background Bluetooth mode, so
+    /// leaving the app hangs up on the scale rather than leaving a connection iOS would suspend.
+    func updateScale(isForeground: Bool) {
+        self.isForeground = isForeground
+        if isForeground && isScaleEnabled {
+            scale.start()
+        } else {
+            scale.stop()
+        }
+    }
+
+    /// Logs a finished weigh-in as today's weight.
+    ///
+    /// Replaces any weight already logged today — the store holds one per day, and stepping on
+    /// the scale with the app open is as deliberate as typing a number in. The widgets follow
+    /// on their own: the store broadcasts `.weights`, which the scene root turns into a reload.
+    func recordScaleMeasurement(_ measurement: ESF24Measurement, at now: Date = Date()) {
+        guard measurement.isPlausibleBodyWeight else { return }
+        let sample = WeightSample(pounds: measurement.pounds, measuredAt: now, source: .scale)
+        do {
+            try stores.weights.save(sample)
+            scaleConfirmation = ScaleConfirmation(pounds: sample.pounds)
+        } catch {
+            scaleConfirmation = ScaleConfirmation(
+                pounds: sample.pounds, failure: error.localizedDescription
+            )
+        }
     }
 
     // MARK: Launch
